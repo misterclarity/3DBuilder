@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DIY Workshop — AI 3D Design Assistant</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🪚</text></svg>">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">🪚 DIY Workshop <span class="sub" data-i18n="app.subtitle">AI 3D design assistant</span></div>
+  <div class="topbtns">
+    <button id="btnNew" data-i18n="btn.new">New</button>
+    <button id="btnSave" data-i18n="btn.save">Save</button>
+    <button id="btnLibrary" data-i18n="btn.library">Library</button>
+    <button id="btnExport" data-i18n="btn.export">Export</button>
+    <button id="btnObj" data-i18n="btn.obj" title="Export 3D model (.obj + .mtl)">OBJ</button>
+    <button id="btnImport" data-i18n="btn.import">Import</button>
+    <input type="file" id="fileImport" accept=".json,application/json" hidden>
+    <button id="btnSettings" data-i18n="btn.settings">⚙ Settings</button>
+    <select id="langSel" title="Language / Sprache">
+      <option value="en">EN</option>
+      <option value="de">DE</option>
+    </select>
+    <button id="btnDebug" title="Debug console (Ctrl+Shift+D)">🐞</button>
+    <span id="connDot" class="dot" title="AI connection status"></span>
+  </div>
+</header>
+
+<main id="layout">
+  <!-- Chat panel -->
+  <section id="chatPanel">
+    <div id="chatLog"></div>
+    <div id="selChip" class="hidden"><span id="selChipText"></span><button id="selChipClear" title="Clear selection">✕</button></div>
+    <div id="chatInputRow">
+      <textarea id="chatInput" rows="3" data-i18n-ph="chat.placeholder" placeholder="Describe what you want to build, or ask for changes…"></textarea>
+      <div class="chatBtns">
+        <button id="btnSend" class="primary" data-i18n="btn.send">Send</button>
+        <button id="btnStop" class="hidden" data-i18n="btn.stop">Stop</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3D + tabs -->
+  <section id="rightPane">
+    <div id="viewerToolbar">
+      <div class="modeGroup">
+        <button class="modeBtn active" data-mode="model" data-i18n="mode.model">Model</button>
+        <button class="modeBtn" data-mode="prep" data-i18n="mode.prep">Cut &amp; Prep</button>
+        <button class="modeBtn" data-mode="assembly" data-i18n="mode.assembly">Assembly</button>
+      </div>
+      <label class="explodeWrap" id="explodeWrap"><span data-i18n="viewer.explode">Explode</span> <input type="range" id="explodeSlider" min="0" max="100" value="0"></label>
+      <label class="chk"><input type="checkbox" id="chkJoints" checked> <span data-i18n="viewer.joints">Joints</span></label>
+      <button id="btnFit" data-i18n="viewer.fit">⤢ Fit</button>
+      <button id="btnMeasure" data-i18n="viewer.measure">📏 Measure</button>
+      <button id="btnUndo" data-i18n-title="btn.undo" disabled>↶</button>
+      <button id="btnRedo" data-i18n-title="btn.redo" disabled>↷</button>
+      <span class="hint" data-i18n="viewer.hint">drag = orbit · wheel = zoom · right-drag = pan · click part = info · Ctrl+click = multi-select</span>
+    </div>
+
+    <div id="viewerWrap">
+      <div id="viewport"><div id="aframeLoading">Loading 3D engine…</div></div>
+
+      <!-- floating part info card -->
+      <aside id="partCard" class="hidden">
+        <div class="cardHead"><b id="pcName"></b><button id="pcClose">✕</button></div>
+        <div id="pcBody"></div>
+        <div class="cardActions">
+          <input type="color" id="pcColor" title="Part color">
+          <select id="pcFinish">
+            <option value="raw" data-i18n="fin.raw">Raw</option><option value="painted" data-i18n="fin.painted">Painted</option>
+            <option value="stained" data-i18n="fin.stained">Stained</option><option value="varnished" data-i18n="fin.varnished">Varnished</option>
+          </select>
+          <label class="mini"><span data-i18n="pc.shine">Shine</span> <input type="range" id="pcShine" min="0" max="100" value="15"></label>
+          <button id="pcApply" class="primary" data-i18n="btn.apply">Apply</button>
+          <button id="pcFocus" data-i18n="btn.focus">Focus</button>
+        </div>
+        <div class="cardActions" id="pcMove">
+          <span class="mini" data-i18n="pc.move">Move (mm)</span>
+          <select id="pcStep"><option>1</option><option selected>5</option><option>25</option><option>100</option></select>
+          <button data-axis="x" data-dir="-1">X−</button><button data-axis="x" data-dir="1">X+</button>
+          <button data-axis="y" data-dir="-1">Y−</button><button data-axis="y" data-dir="1">Y+</button>
+          <button data-axis="z" data-dir="-1">Z−</button><button data-axis="z" data-dir="1">Z+</button>
+        </div>
+      </aside>
+
+      <!-- assembly step overlay -->
+      <div id="asmBar" class="hidden">
+        <button id="asmPrev">◀</button>
+        <div id="asmInfo"><b id="asmTitle"></b><span id="asmText"></span></div>
+        <button id="asmNext">▶</button>
+      </div>
+    </div>
+
+    <!-- bottom tabs -->
+    <div id="tabs">
+      <div class="tabBtns">
+        <button class="tabBtn active" data-tab="cutlist" data-i18n="tab.cutlist">Cut list</button>
+        <button class="tabBtn" data-tab="steps" data-i18n="tab.steps">Assembly steps</button>
+        <button class="tabBtn" data-tab="finishing" data-i18n="tab.finishing">Finishing</button>
+        <button id="btnPrint" class="right" data-i18n="btn.print">🖨 Print</button>
+      </div>
+      <div id="tab-cutlist" class="tabBody active"></div>
+      <div id="tab-steps" class="tabBody"></div>
+      <div id="tab-finishing" class="tabBody"></div>
+    </div>
+  </section>
+</main>
+
+<!-- Settings modal -->
+<div id="settingsModal" class="modal hidden">
+  <div class="modalBox">
+    <h2 data-i18n="set.title">Settings</h2>
+    <label><span data-i18n="set.endpoint">AI endpoint (OpenAI-compatible base URL)</span>
+      <input id="setEndpoint" type="text" placeholder="http://100.119.213.123:8080/v1">
+    </label>
+    <label><span data-i18n="set.model">Model name</span>
+      <input id="setModel" type="text" placeholder="qwen3.6-27b-mtp">
+    </label>
+    <div class="row2">
+      <label><span data-i18n="set.temp">Temperature</span> <input id="setTemp" type="number" step="0.1" min="0" max="2"></label>
+      <label><span data-i18n="set.maxtok">Max tokens</span> <input id="setMaxTok" type="number" step="512" min="1024"></label>
+    </div>
+    <small data-i18n="set.llmNote">Sent with each request — they override the llama.cpp/server defaults. Leave empty to use the server's settings.</small>
+    <div class="row2">
+      <label><span data-i18n="set.aframe">A-Frame version</span>
+        <input id="setAframe" type="text" placeholder="1.8.0">
+      </label>
+      <label><span data-i18n="set.lang">Language</span>
+        <select id="setLang">
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+        </select>
+      </label>
+    </div>
+    <small data-i18n-html="set.aframeNote">Loaded from <code>aframe.io/releases/&lt;version&gt;/aframe.min.js</code>.</small>
+    <div class="noteBox" data-i18n-html="set.mixed"></div>
+    <div class="modalBtns">
+      <button id="setTest" data-i18n="set.test">Test connection</button>
+      <span id="setTestResult"></span>
+      <span class="spacer"></span>
+      <button id="setCancel" data-i18n="btn.cancel">Cancel</button>
+      <button id="setSaveBtn" class="primary" data-i18n="btn.save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Library modal -->
+<div id="libraryModal" class="modal hidden">
+  <div class="modalBox">
+    <h2 data-i18n="lib.title">Design library</h2>
+    <div id="libList"></div>
+    <div class="modalBtns"><span class="spacer"></span><button id="libClose" data-i18n="btn.close">Close</button></div>
+  </div>
+</div>
+
+<script src="js/debug.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/schema.js"></script>
+<script src="js/materials.js"></script>
+<script src="js/llm.js"></script>
+<script src="js/prompts.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/optimizer.js"></script>
+<script src="js/export3d.js"></script>
+<script src="js/viewer.js"></script>
+<script>
+// Bootstrap: load the configured A-Frame version, then start the app.
+(function () {
+  var ver = (window.LLM.settings().aframeVersion || '1.8.0').trim();
+  function load(v, isFallback) {
+    var s = document.createElement('script');
+    s.src = 'https://aframe.io/releases/' + v + '/aframe.min.js';
+    s.onload = function () {
+      if (window.Debug) Debug.log('ok', 'boot', 'A-Frame ' + (window.AFRAME ? AFRAME.version : v) + ' loaded, starting app');
+      var app = document.createElement('script');
+      app.src = 'js/app.js';
+      app.onerror = function () { if (window.Debug) Debug.log('error', 'boot', 'js/app.js failed to load'); };
+      document.body.appendChild(app);
+    };
+    s.onerror = function () {
+      if (!isFallback) {
+        console.warn('A-Frame ' + v + ' failed to load, falling back to 1.8.0');
+        load('1.8.0', true);
+      } else {
+        document.getElementById('aframeLoading').textContent = 'Failed to load A-Frame. Check your internet connection and the version in Settings.';
+      }
+    };
+    document.head.appendChild(s);
+  }
+  load(ver, false);
+})();
+</script>
+</body>
+</html>
