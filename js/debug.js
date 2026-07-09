@@ -19,7 +19,7 @@
     var e = { t: ts(), level: level, source: source, msg: String(msg) };
     entries.push(e);
     if (entries.length > MAX) entries.shift();
-    if (panel && !panel.hidden) render();
+    if (panel && panel.style.display !== 'none') render();
     if ((level === 'error' || level === 'warn') && badge) badge.style.display = 'inline-block';
   }
 
@@ -73,9 +73,10 @@
   function ensurePanel() {
     if (panel) return;
     panel = document.createElement('div');
-    panel.hidden = true;
-    panel.style.cssText = 'position:fixed;right:10px;bottom:10px;width:520px;max-width:95vw;max-height:45vh;z-index:9999;' +
-      'background:#10151a;color:#cfd8dc;border:1px solid #445;border-radius:8px;display:flex;flex-direction:column;' +
+    // NB: visibility is controlled via style.display (an inline display:flex
+    // would override the `hidden` attribute, which is why ✕ used to not work).
+    panel.style.cssText = 'position:fixed;right:10px;bottom:10px;width:520px;height:40vh;min-width:280px;min-height:140px;z-index:9999;' +
+      'background:#10151a;color:#cfd8dc;border:1px solid #445;border-radius:8px;display:none;flex-direction:column;' +
       'font:11px/1.5 Consolas,Menlo,monospace;box-shadow:0 4px 20px rgba(0,0,0,.5)';
     var bar = document.createElement('div');
     bar.style.cssText = 'display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid #333;align-items:center';
@@ -101,6 +102,28 @@
     listEl.style.cssText = 'overflow-y:auto;padding:6px 8px;flex:1;white-space:pre-wrap;word-break:break-word';
     panel.appendChild(bar);
     panel.appendChild(listEl);
+    // resize grip (top-left, since the panel is anchored bottom-right)
+    var grip = document.createElement('div');
+    grip.title = 'Drag to resize';
+    grip.style.cssText = 'position:absolute;left:0;top:0;width:16px;height:16px;cursor:nwse-resize;' +
+      'border-left:3px solid #556;border-top:3px solid #556;border-radius:8px 0 0 0';
+    grip.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      grip.setPointerCapture(e.pointerId);
+      var r = panel.getBoundingClientRect();
+      function mv(ev) {
+        panel.style.width = Math.max(280, Math.min(r.right - ev.clientX, window.innerWidth - 20)) + 'px';
+        panel.style.height = Math.max(140, Math.min(r.bottom - ev.clientY, window.innerHeight - 20)) + 'px';
+      }
+      function up(ev) {
+        grip.releasePointerCapture(ev.pointerId);
+        grip.removeEventListener('pointermove', mv);
+        grip.removeEventListener('pointerup', up);
+      }
+      grip.addEventListener('pointermove', mv);
+      grip.addEventListener('pointerup', up);
+    });
+    panel.appendChild(grip);
     document.body.appendChild(panel);
   }
 
@@ -115,8 +138,10 @@
 
   function toggle(show) {
     ensurePanel();
-    panel.hidden = (show === undefined) ? !panel.hidden : !show;
-    if (!panel.hidden) {
+    var visible = panel.style.display !== 'none';
+    var want = (show === undefined) ? !visible : !!show;
+    panel.style.display = want ? 'flex' : 'none';
+    if (want) {
       if (badge) badge.style.display = 'none';
       envInfo().forEach(function (l) { if (l.indexOf('⚠') >= 0) log('warn', 'env', l); });
       render();
