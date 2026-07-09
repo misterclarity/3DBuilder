@@ -4,7 +4,7 @@
 
   var DEFAULTS = {
     endpoint: 'http://100.119.213.123:8080/v1',
-    model: 'qwen3.6-27b-mtp',
+    model: '', // '' = auto: use whatever model the server reports on /models
     temperature: 0.4,
     maxTokens: 16384,
     aframeVersion: '1.8.0',
@@ -17,10 +17,34 @@
     var out = {};
     Object.keys(DEFAULTS).forEach(function (k) {
       // Empty temperature/maxTokens mean "omit from requests, use the server's defaults".
-      if ((k === 'temperature' || k === 'maxTokens') && s[k] === '') { out[k] = ''; return; }
+      // Empty model means "auto — resolve from the server's /models list".
+      if ((k === 'temperature' || k === 'maxTokens' || k === 'model') && s[k] === '') { out[k] = ''; return; }
       out[k] = (s[k] !== undefined && s[k] !== '') ? s[k] : DEFAULTS[k];
     });
     return out;
+  }
+
+  // Cache the auto-detected model per endpoint for 5 minutes.
+  var modelCache = { endpoint: '', id: '', at: 0 };
+
+  /* Resolve which model to send: the configured one, or (auto) the first
+   * model the server is currently serving. Resolves to '' if unknown —
+   * llama.cpp and most single-model servers ignore the field anyway. */
+  function resolveModel() {
+    var s = settings();
+    if (s.model) return Promise.resolve(s.model);
+    if (modelCache.id && modelCache.endpoint === s.endpoint && (Date.now() - modelCache.at) < 300000) {
+      return Promise.resolve(modelCache.id);
+    }
+    return fetch(s.endpoint.replace(/\/+$/, '') + '/models')
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (j) {
+        var id = (j.data && j.data[0] && j.data[0].id) || '';
+        modelCache = { endpoint: s.endpoint, id: id, at: Date.now() };
+        if (id && window.Debug) Debug.log('info', 'llm', 'Auto-detected model: ' + id);
+        return id;
+      })
+      .catch(function () { return ''; });
   }
 
   function saveSettings(s) {
@@ -34,17 +58,20 @@
   function chat(messages, onDelta) {
     var s = settings();
     var ctrl = new AbortController();
-    var promise = fetch(s.endpoint.replace(/\/+$/, '') + '/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: ctrl.signal,
-      body: JSON.stringify((function () {
-        var body = { model: s.model, messages: messages, stream: true };
-        // Only send sampling params that are explicitly set; otherwise the server defaults apply.
-        if (s.temperature !== '' && isFinite(Number(s.temperature))) body.temperature = Number(s.temperature);
-        if (s.maxTokens !== '' && isFinite(Number(s.maxTokens))) body.max_tokens = Number(s.maxTokens);
-        return body;
-      })())
+    var promise = resolveModel().then(function (model) {
+      return fetch(s.endpoint.replace(/\/+$/, '') + '/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ctrl.signal,
+        body: JSON.stringify((function () {
+          var body = { messages: messages, stream: true };
+          if (model) body.model = model;
+          // Only send sampling params that are explicitly set; otherwise the server defaults apply.
+          if (s.temperature !== '' && isFinite(Number(s.temperature))) body.temperature = Number(s.temperature);
+          if (s.maxTokens !== '' && isFinite(Number(s.maxTokens))) body.max_tokens = Number(s.maxTokens);
+          return body;
+        })())
+      });
     }).then(function (res) {
       if (!res.ok) {
         return res.text().then(function (t) {
@@ -89,8 +116,14 @@
       })
       .then(function (j) {
         var models = (j.data || []).map(function (m) { return m.id; });
+        if (models.length) modelCache = { endpoint: s.endpoint, id: models[0], at: Date.now() };
         return { ok: true, models: models };
       });
+  }
+
+  // List models currently served by the endpoint.
+  function listModels() {
+    return testConnection().then(function (r) { return r.models; });
   }
 
   /* Extract the JSON envelope from a model response.
@@ -158,6 +191,8 @@
     settings: settings,
     saveSettings: saveSettings,
     chat: chat,
+    resolveModel: resolveModel,
+    listModels: listModels,
     testConnection: testConnection,
     extractJSON: extractJSON
   };

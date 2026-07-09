@@ -6,6 +6,7 @@
   --ok: #43a047; --err: #e53935;
 }
 html, body { height: 100%; margin: 0; }
+@supports (height: 100dvh) { body { height: 100dvh; } } /* mobile: track the real visible viewport */
 body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; overflow: hidden; }
 
 button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
@@ -32,9 +33,10 @@ a { color: #64b5f6; }
 #rightPane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
 /* Splitters (resizable sections) */
-#vSplit { flex: 0 0 6px; cursor: col-resize; background: var(--bg); border-right: 1px solid var(--line); position: relative; }
-#hSplit { flex: 0 0 6px; cursor: row-resize; background: var(--bg); border-top: 1px solid var(--line); }
-#vSplit:hover, #hSplit:hover { background: var(--accent); }
+#vSplit { flex: 0 0 6px; cursor: col-resize; background: var(--bg); border-right: 1px solid var(--line); position: relative; touch-action: none; }
+#hSplit { flex: 0 0 6px; cursor: row-resize; background: var(--bg); border-top: 1px solid var(--line); touch-action: none; }
+#chatSplit { flex: 0 0 6px; cursor: row-resize; background: var(--bg); border-top: 1px solid var(--line); touch-action: none; }
+#vSplit:hover, #hSplit:hover, #chatSplit:hover { background: var(--accent); }
 #chatCollapse { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 20px; height: 48px; padding: 0; font-size: 10px; line-height: 1; border-radius: 6px; z-index: 6; }
 body.resizing { user-select: none; }
 body.resizing canvas, body.resizing iframe { pointer-events: none; }
@@ -55,8 +57,8 @@ body.resizing canvas, body.resizing iframe { pointer-events: none; }
 
 #selChip { margin: 0 12px; padding: 5px 10px; background: #143048; border: 1px solid var(--accent); border-radius: 20px; font-size: 12px; display: flex; align-items: center; gap: 8px; }
 #selChip button { padding: 0 6px; border: none; background: transparent; color: var(--muted); }
-#chatInputRow { padding: 10px 12px; border-top: 1px solid var(--line); display: flex; gap: 8px; }
-#chatInput { flex: 1; resize: none; }
+#chatInputRow { padding: 10px 12px; border-top: 1px solid var(--line); display: flex; gap: 8px; flex: 0 0 auto; min-height: 70px; }
+#chatInput { flex: 1; resize: none; min-height: 0; }
 .chatBtns { display: flex; flex-direction: column; gap: 6px; }
 
 /* Viewer */
@@ -141,6 +143,28 @@ button:disabled:hover { border-color: var(--line); }
 #pcMove { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
 #pcMove button { padding: 2px 8px; font-size: 12px; }
 #pcMove select { padding: 3px 5px; }
+
+/* Mobile / small screens (body.mobile is set by layout.js) */
+@media (pointer: coarse) {
+  #vSplit, #hSplit, #chatSplit { flex-basis: 14px; } /* touch-friendly grab targets */
+  #chatCollapse { font-size: 12px; }
+  button { padding: 8px 12px; }
+}
+body.mobile #topbar { flex-wrap: wrap; row-gap: 6px; padding: 6px 10px; }
+body.mobile .topbtns { flex-wrap: wrap; }
+body.mobile .brand .sub { display: none; }
+body.mobile #layout { flex-direction: column; }
+body.mobile #chatPanel { width: 100% !important; min-width: 0; height: 38%; min-height: 120px; border-right: none; }
+body.mobile #chatPanel.collapsed { height: 0 !important; min-height: 0; width: 100% !important; }
+body.mobile #vSplit { cursor: row-resize; border-right: none; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+body.mobile #chatCollapse { width: 56px; height: 20px; }
+body.mobile #viewerToolbar { gap: 8px; padding: 6px 8px; }
+body.mobile .hint { display: none; }
+body.mobile #tabs { height: 170px; }
+body.mobile #partCard { width: auto; max-width: calc(100vw - 24px); left: 12px; right: 12px; }
+body.mobile #asmBar { max-width: 94%; }
+body.mobile #chatLog { padding: 8px; }
+body.mobile #chatInputRow { padding: 8px; }
 
 /* Print: only cut list + steps */
 @media print {

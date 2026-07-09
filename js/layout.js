@@ -1,15 +1,31 @@
-/* layout.js — resizable panels + collapsible chat.
- * Adds a vertical splitter between the chat panel and the viewer (with a
- * collapse button) and a horizontal splitter between the viewer and the
- * bottom tabs. Sizes persist in localStorage. Fires window `resize` while
+/* layout.js — resizable panels + collapsible chat + mobile-aware layout.
+ * Desktop: vertical splitter chat|viewer, horizontal splitter viewer/tabs,
+ * and a splitter inside the chat panel to resize the input area.
+ * Mobile (narrow or coarse-pointer screens): panels stack vertically, the
+ * chat splitter becomes a height handle, splitters get touch-friendly sizes,
+ * and everything is re-clamped to the available screen space on resize /
+ * rotation. Sizes persist in localStorage. Fires window `resize` while
  * dragging so the A-Frame canvas follows.
  */
 (function () {
   'use strict';
 
-  var LS = { chatW: 'diy.layout.chatW', tabsH: 'diy.layout.tabsH', chatCol: 'diy.layout.chatCollapsed' };
+  var LS = {
+    chatW: 'diy.layout.chatW',       // desktop: chat panel width
+    chatH: 'diy.layout.chatH',       // mobile: chat panel height
+    tabsH: 'diy.layout.tabsH',
+    inputH: 'diy.layout.chatInputH', // chat input area height
+    chatCol: 'diy.layout.chatCollapsed'
+  };
+
+  // Mobile = narrow viewport, or a touch device with a smallish screen.
+  var mq = window.matchMedia('(max-width: 820px), (pointer: coarse) and (max-width: 1080px)');
+  function isMobile() { return mq.matches; }
 
   function fireResize() { window.dispatchEvent(new Event('resize')); }
+  function clamp(v, min, max) { return Math.max(min, Math.min(v, max)); }
+  function lsGet(k) { var v = parseInt(localStorage.getItem(k), 10); return isFinite(v) ? v : 0; }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
   function drag(el, onMove, onEnd) {
     el.addEventListener('pointerdown', function (e) {
@@ -36,15 +52,11 @@
     var chat = document.getElementById('chatPanel');
     var right = document.getElementById('rightPane');
     var tabs = document.getElementById('tabs');
+    var inputRow = document.getElementById('chatInputRow');
+    var selChip = document.getElementById('selChip');
     if (!layout || !chat || !right || !tabs) return;
 
-    // restore saved sizes
-    var w = parseInt(localStorage.getItem(LS.chatW), 10);
-    if (w) chat.style.width = Math.min(w, window.innerWidth * 0.7) + 'px';
-    var h = parseInt(localStorage.getItem(LS.tabsH), 10);
-    if (h) tabs.style.height = Math.min(h, window.innerHeight * 0.7) + 'px';
-
-    // --- vertical splitter: chat | viewer, with collapse button ---
+    // --- vertical splitter: chat | viewer (chat / viewer on mobile), with collapse button ---
     var vSplit = document.createElement('div');
     vSplit.id = 'vSplit';
     vSplit.title = 'Drag to resize chat';
@@ -57,21 +69,40 @@
     function collapsed() { return chat.classList.contains('collapsed'); }
     function setCollapsed(c) {
       chat.classList.toggle('collapsed', c);
-      colBtn.textContent = c ? '▶' : '◀';
-      try { localStorage.setItem(LS.chatCol, c ? '1' : ''); } catch (e) {}
+      colBtn.textContent = isMobile() ? (c ? '▼' : '▲') : (c ? '▶' : '◀');
+      lsSet(LS.chatCol, c ? '1' : '');
       fireResize();
     }
     colBtn.addEventListener('click', function () { setCollapsed(!collapsed()); });
-    setCollapsed(localStorage.getItem(LS.chatCol) === '1');
 
     drag(vSplit, function (e) {
       if (collapsed()) return;
-      var left = layout.getBoundingClientRect().left;
-      var width = Math.max(200, Math.min(e.clientX - left, window.innerWidth * 0.7));
-      chat.style.width = width + 'px';
+      var r = layout.getBoundingClientRect();
+      if (isMobile()) {
+        chat.style.height = clamp(e.clientY - r.top, 120, r.height * 0.75) + 'px';
+      } else {
+        chat.style.width = clamp(e.clientX - r.left, 200, window.innerWidth * 0.7) + 'px';
+      }
     }, function () {
-      try { localStorage.setItem(LS.chatW, parseInt(chat.style.width, 10) || ''); } catch (e) {}
+      if (isMobile()) lsSet(LS.chatH, parseInt(chat.style.height, 10) || '');
+      else lsSet(LS.chatW, parseInt(chat.style.width, 10) || '');
     });
+
+    // --- splitter inside the chat panel: chat log / input area ---
+    var cSplit = document.createElement('div');
+    cSplit.id = 'chatSplit';
+    cSplit.title = 'Drag to resize input area';
+    if (inputRow) {
+      chat.insertBefore(cSplit, selChip || inputRow);
+      drag(cSplit, function (e) {
+        var r = chat.getBoundingClientRect();
+        inputRow.style.height = clamp(r.bottom - e.clientY, 70, r.height - 120) + 'px';
+      }, function () {
+        lsSet(LS.inputH, parseInt(inputRow.style.height, 10) || '');
+      });
+      var ih = lsGet(LS.inputH);
+      if (ih) inputRow.style.height = clamp(ih, 70, window.innerHeight - 160) + 'px';
+    }
 
     // --- horizontal splitter: viewer / bottom tabs ---
     var hSplit = document.createElement('div');
@@ -81,12 +112,60 @@
 
     drag(hSplit, function (e) {
       var r = right.getBoundingClientRect();
-      var height = Math.max(60, Math.min(r.bottom - e.clientY, r.height - 140));
-      tabs.style.height = height + 'px';
+      tabs.style.height = clamp(r.bottom - e.clientY, 60, r.height - 140) + 'px';
     }, function () {
-      try { localStorage.setItem(LS.tabsH, parseInt(tabs.style.height, 10) || ''); } catch (e) {}
+      lsSet(LS.tabsH, parseInt(tabs.style.height, 10) || '');
     });
 
-    if (window.Debug) Debug.log('ok', 'layout', 'Splitters ready (drag to resize, ◀ collapses chat)');
+    // --- mobile / desktop mode + fitting to available screen space ---
+    function applyMode() {
+      var m = isMobile();
+      document.body.classList.toggle('mobile', m);
+      if (m) {
+        chat.style.width = '';
+        var h = lsGet(LS.chatH) || Math.round(window.innerHeight * 0.38);
+        chat.style.height = clamp(h, 120, window.innerHeight * 0.7) + 'px';
+      } else {
+        chat.style.height = '';
+        var w = lsGet(LS.chatW) || 360;
+        chat.style.width = clamp(w, 200, window.innerWidth * 0.7) + 'px';
+      }
+      var th = lsGet(LS.tabsH);
+      if (th) tabs.style.height = clamp(th, 60, Math.max(160, window.innerHeight - 260)) + 'px';
+      setCollapsed(collapsed()); // refresh arrow glyph for orientation
+    }
+
+    // Re-clamp panels to the viewport after rotation, keyboard, or window resize.
+    function reclamp() {
+      if (document.body.classList.contains('mobile') !== isMobile()) { applyMode(); return; }
+      if (isMobile()) {
+        var h = parseInt(chat.style.height, 10);
+        if (h) chat.style.height = clamp(h, 120, window.innerHeight * 0.7) + 'px';
+      } else {
+        var w = parseInt(chat.style.width, 10);
+        if (w) chat.style.width = clamp(w, 200, window.innerWidth * 0.7) + 'px';
+      }
+      var rh = right.getBoundingClientRect().height;
+      var th = parseInt(tabs.style.height, 10);
+      if (th && rh > 200) tabs.style.height = clamp(th, 60, rh - 140) + 'px';
+      if (inputRow) {
+        var ch = chat.getBoundingClientRect().height;
+        var ih = parseInt(inputRow.style.height, 10);
+        if (ih && ch > 200) inputRow.style.height = clamp(ih, 70, ch - 120) + 'px';
+      }
+    }
+    var rcTimer = null;
+    window.addEventListener('resize', function () {
+      clearTimeout(rcTimer);
+      rcTimer = setTimeout(reclamp, 150);
+    });
+    if (mq.addEventListener) mq.addEventListener('change', applyMode);
+    else if (mq.addListener) mq.addListener(applyMode); // older Safari
+
+    setCollapsed(localStorage.getItem(LS.chatCol) === '1');
+    applyMode();
+
+    window.Layout = { isMobile: isMobile };
+    if (window.Debug) Debug.log('ok', 'layout', 'Splitters ready (' + (isMobile() ? 'mobile' : 'desktop') + ' mode)');
   });
 })();

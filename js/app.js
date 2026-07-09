@@ -609,10 +609,31 @@
   }
 
   // ---------- settings ----------
+  // Fill the model <select>: keep the "Auto" option, add the saved model (if
+  // any), then whatever the endpoint reports on /models.
+  function populateModels(current) {
+    var sel = $('setModel');
+    while (sel.options.length > 1) sel.remove(1);
+    if (current) {
+      var o = document.createElement('option');
+      o.value = current; o.textContent = current;
+      sel.appendChild(o);
+    }
+    sel.value = current || '';
+    LLM.listModels().then(function (models) {
+      models.forEach(function (id) {
+        if (id === current) return;
+        var o = document.createElement('option');
+        o.value = id; o.textContent = id;
+        sel.appendChild(o);
+      });
+    }).catch(function () { /* endpoint unreachable — Auto still works later */ });
+  }
+
   $('btnSettings').onclick = function () {
     var s = LLM.settings();
     $('setEndpoint').value = s.endpoint;
-    $('setModel').value = s.model;
+    populateModels(s.model);
     $('setTemp').value = s.temperature;
     $('setMaxTok').value = s.maxTokens;
     $('setAframe').value = s.aframeVersion;
@@ -625,7 +646,7 @@
   function collectSettings() {
     return {
       endpoint: $('setEndpoint').value.trim(),
-      model: $('setModel').value.trim(),
+      model: $('setModel').value,
       temperature: $('setTemp').value.trim() === '' ? '' : (Number($('setTemp').value) || 0.4),
       maxTokens: $('setMaxTok').value.trim() === '' ? '' : (Number($('setMaxTok').value) || 16384),
       aframeVersion: $('setAframe').value.trim() || '1.8.0',
@@ -652,6 +673,7 @@
     LLM.testConnection().then(function (r) {
       $('setTestResult').textContent = t('set.connected', { m: r.models.join(', ') || '—' });
       $('connDot').className = 'dot ok';
+      populateModels($('setModel').value); // refresh list for the (possibly new) endpoint
     }).catch(function (e) {
       $('setTestResult').textContent = '✖ ' + e.message;
       $('connDot').className = 'dot err';
@@ -660,9 +682,9 @@
   };
 
   function testConn() {
-    LLM.testConnection().then(function () {
+    LLM.testConnection().then(function (r) {
       $('connDot').className = 'dot ok';
-      $('connDot').title = 'AI connected';
+      $('connDot').title = 'AI connected' + (r.models.length ? ' — ' + r.models[0] : '');
     }).catch(function (e) {
       $('connDot').className = 'dot err';
       $('connDot').title = 'AI not reachable: ' + e.message;

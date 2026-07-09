@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>DIY Workshop — AI 3D Design Assistant</title>
 <link rel="stylesheet" href="css/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🪚</text></svg>">
@@ -115,8 +115,10 @@
     <label><span data-i18n="set.endpoint">AI endpoint (OpenAI-compatible base URL)</span>
       <input id="setEndpoint" type="text" placeholder="http://100.119.213.123:8080/v1">
     </label>
-    <label><span data-i18n="set.model">Model name</span>
-      <input id="setModel" type="text" placeholder="qwen3.6-27b-mtp">
+    <label><span data-i18n="set.model">Model</span>
+      <select id="setModel">
+        <option value="" data-i18n="set.modelAuto">Auto — use the model the server is serving</option>
+      </select>
     </label>
     <div class="row2">
       <label><span data-i18n="set.temp">Temperature</span> <input id="setTemp" type="number" step="0.1" min="0" max="2"></label>
