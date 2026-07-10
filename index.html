@@ -16,6 +16,7 @@
     <button id="btnLibrary" data-i18n="btn.library">Library</button>
     <button id="btnExport" data-i18n="btn.export">Export</button>
     <button id="btnObj" data-i18n="btn.obj" title="Export 3D model (.obj + .mtl)">OBJ</button>
+    <button id="btnPdf" data-i18n="btn.pdf" title="Export plans as PDF (2D views + cut list + assembly)">PDF</button>
     <button id="btnImport" data-i18n="btn.import">Import</button>
     <input type="file" id="fileImport" accept=".json,application/json" hidden>
     <button id="btnSettings" data-i18n="btn.settings">⚙ Settings</button>
@@ -125,6 +126,14 @@
       <label><span data-i18n="set.maxtok">Max tokens</span> <input id="setMaxTok" type="number" step="512" min="1024"></label>
     </div>
     <small data-i18n="set.llmNote">Sent with each request — they override the llama.cpp/server defaults. Leave empty to use the server's settings.</small>
+    <label><span data-i18n="set.strict">Strict JSON output (response_format json_schema)</span>
+      <select id="setStrict">
+        <option value="auto" data-i18n="set.strictAuto">Auto — try it, fall back if the server rejects it</option>
+        <option value="on" data-i18n="set.strictOn">On — always send the schema</option>
+        <option value="off" data-i18n="set.strictOff">Off</option>
+      </select>
+    </label>
+    <small data-i18n="set.strictNote">Guarantees valid JSON via a server-side grammar (llama.cpp). May suppress the model's thinking phase — turn Off if design quality drops.</small>
     <div class="row2">
       <label><span data-i18n="set.aframe">A-Frame version</span>
         <input id="setAframe" type="text" placeholder="1.8.0">
@@ -167,6 +176,7 @@
 <script src="js/storage.js"></script>
 <script src="js/optimizer.js"></script>
 <script src="js/export3d.js"></script>
+<script src="js/plans.js"></script>
 <script src="js/viewer.js"></script>
 <script>
 // Bootstrap: load the configured A-Frame version, then start the app.

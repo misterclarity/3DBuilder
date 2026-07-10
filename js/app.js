@@ -105,6 +105,17 @@
     if (currentDesign) Export3D.exportOBJ(currentDesign, currentName);
   };
 
+  // ---------- PDF plans export ----------
+  $('btnPdf').onclick = function () {
+    if (!currentDesign) { addMsg('sys', t('msg.nothingToSave')); return; }
+    var btn = this;
+    btn.disabled = true;
+    Plans.exportPDF(currentDesign, currentName, t, lastPlan)
+      .then(function () { addMsg('sys', t('msg.pdfDone')); })
+      .catch(function (e) { addMsg('err', t('err.pdf', { e: e.message })); })
+      .then(function () { btn.disabled = false; });
+  };
+
   // ---------- part-level diff for AI modifications ----------
   function diffDesigns(a, b) {
     var am = {}, bm = {};
@@ -158,7 +169,7 @@
     var msgs = Prompts.buildMessages(chatHistory.slice(0, -1).slice(-10), currentDesign, selectedIds, text);
     activeReq = LLM.chat(msgs, function (_d, full) {
       thinking.textContent = t('chat.designing') + ' (' + full.length + ')';
-    });
+    }, { responseSchema: Schema.ENVELOPE });
 
     activeReq.promise.then(function (full) {
       finishReq();
@@ -205,43 +216,60 @@
       return;
     }
     if (env.type === 'design') {
-      var v = Schema.validate(env.design);
-      if (!v.ok) {
-        addMsg('err', t('err.invalid', { e: v.errors.join('; ') }));
-        chatHistory.push({ role: 'assistant', content: 'Produced invalid design: ' + v.errors.join('; ') });
+      applyDesignEnvelope(env, Schema.validate(env.design), []);
+      return;
+    }
+    if (env.type === 'patch') {
+      if (!currentDesign) {
+        addMsg('err', t('err.patchNoDesign'));
+        chatHistory.push({ role: 'assistant', content: 'Sent a patch but there is no current design.' });
         return;
       }
-      // Joint sanity: snap misplaced markers, warn about impossible joints.
-      var audit = Schema.auditJoints(v.design);
-      var diffMsg = (currentDesign && env.scope !== 'new') ? diffDesigns(currentDesign, v.design) : null;
-      var isNewProject = env.scope === 'new' && currentDesign && v.design.meta.name !== currentDesign.meta.name;
-      if (isNewProject && dirty) {
-        // Don't lose unsaved work: silently back it up to the library first.
-        var backupName = (currentName || currentDesign.meta.name);
-        Store.save({ name: backupName, design: currentDesign, chat: chatHistory.slice(-14), thumbnail: Viewer.screenshot(240) })
-          .then(function () { addMsg('sys', t('msg.autosaved', { n: backupName })); })
-          .catch(function () {});
-        currentRecordId = null;
-      }
-      setDesign(v.design, v.design.meta.name);
-      markDirty();
-      pushHistory();
-      var summary = env.summary || v.design.meta.name;
-      addMsg('ai', summary + '\n' + t('msg.designStats', { p: v.design.parts.length, s: v.design.assembly.length }));
-      if (diffMsg) addMsg('sys', diffMsg);
-      var warnBits = [];
-      if (audit.moved) warnBits.push(t('audit.moved', { n: audit.moved }));
-      audit.notouch.forEach(function (id) { warnBits.push(t('audit.notouch', { id: id })); });
-      if (v.warnings.length) warnBits.push(v.warnings.slice(0, 2).join(' · '));
-      if (warnBits.length) {
-        var wm = addMsg('sys', '⚠ ' + warnBits.join('\n⚠ '));
-        wm.title = v.warnings.concat(audit.notouch).join('\n');
-      }
-      // Keep history light: don't repeat the whole design (it is re-injected each turn).
-      chatHistory.push({ role: 'assistant', content: JSON.stringify({ type: 'design', scope: env.scope || 'new', summary: summary }) });
+      var pr = Schema.applyPatch(currentDesign, env.ops || []);
+      env.scope = 'modify';
+      applyDesignEnvelope(env, Schema.validate(pr.design), pr.notes);
       return;
     }
     addMsg('err', t('err.unknownType', { t: env.type }));
+  }
+
+  // Shared handling for full-design and patch responses.
+  function applyDesignEnvelope(env, v, extraNotes) {
+    if (!v.ok) {
+      addMsg('err', t('err.invalid', { e: v.errors.join('; ') }));
+      chatHistory.push({ role: 'assistant', content: 'Produced invalid design: ' + v.errors.join('; ') });
+      return;
+    }
+    // Joint sanity: snap misplaced markers, warn about impossible joints.
+    var audit = Schema.auditJoints(v.design);
+    var diffMsg = (currentDesign && env.scope !== 'new') ? diffDesigns(currentDesign, v.design) : null;
+    var isNewProject = env.scope === 'new' && currentDesign && v.design.meta.name !== currentDesign.meta.name;
+    if (isNewProject && dirty) {
+      // Don't lose unsaved work: silently back it up to the library first.
+      var backupName = (currentName || currentDesign.meta.name);
+      Store.save({ name: backupName, design: currentDesign, chat: chatHistory.slice(-14), thumbnail: Viewer.screenshot(240) })
+        .then(function () { addMsg('sys', t('msg.autosaved', { n: backupName })); })
+        .catch(function () {});
+      currentRecordId = null;
+    }
+    // Patches keep the user's chosen name; new designs adopt the design name.
+    setDesign(v.design, (env.type === 'patch' && currentName) ? currentName : v.design.meta.name);
+    markDirty();
+    pushHistory();
+    var summary = env.summary || v.design.meta.name;
+    addMsg('ai', summary + '\n' + t('msg.designStats', { p: v.design.parts.length, s: v.design.assembly.length }));
+    if (diffMsg) addMsg('sys', diffMsg);
+    var warnBits = [];
+    if (audit.moved) warnBits.push(t('audit.moved', { n: audit.moved }));
+    audit.notouch.forEach(function (id) { warnBits.push(t('audit.notouch', { id: id })); });
+    (extraNotes || []).forEach(function (n) { warnBits.push(n); });
+    if (v.warnings.length) warnBits.push(v.warnings.slice(0, 2).join(' · '));
+    if (warnBits.length) {
+      var wm = addMsg('sys', '⚠ ' + warnBits.join('\n⚠ '));
+      wm.title = v.warnings.concat(audit.notouch).concat(extraNotes || []).join('\n');
+    }
+    // Keep history light: don't repeat the whole design (it is re-injected each turn).
+    chatHistory.push({ role: 'assistant', content: JSON.stringify({ type: env.type, scope: env.scope || 'new', summary: summary }) });
   }
 
   setInterval(function () {
@@ -358,7 +386,7 @@
 
   function jointLabel(jid) {
     var j = currentDesign.joints.find(function (q) { return q.id === jid; });
-    return j ? j.type : jid;
+    return j ? j.type.replace(/_/g, ' ') : jid;
   }
 
   function renderFinishing() {
@@ -416,7 +444,7 @@
       html += '<div class="kv"><b>' + t('pc.connections') + '</b></div><ul>';
       joints.forEach(function (j) {
         var other = j.parts.filter(function (x) { return x !== p.id; }).map(partName).join(', ');
-        html += '<li>' + esc(j.type) + (other ? ' → ' + esc(other) : '') + (j.note ? ' (' + esc(j.note) + ')' : '') + '</li>';
+        html += '<li>' + esc(j.type.replace(/_/g, ' ')) + (other ? ' → ' + esc(other) : '') + (j.note ? ' (' + esc(j.note) + ')' : '') + '</li>';
       });
       html += '</ul>';
     }
@@ -430,7 +458,7 @@
 
   function showJointCard(j) {
     if (!j) return;
-    $('pcName').textContent = t('pc.joint') + ': ' + j.type;
+    $('pcName').textContent = t('pc.joint') + ': ' + j.type.replace(/_/g, ' ');
     $('pcBody').innerHTML = '<div class="kv">' + t('pc.connects') + ': ' + j.parts.map(partName).map(esc).join(' + ') + '</div>' +
       (j.note ? '<div class="kv">' + esc(j.note) + '</div>' : '');
     $('partCard').classList.remove('hidden');
@@ -636,6 +664,7 @@
     populateModels(s.model);
     $('setTemp').value = s.temperature;
     $('setMaxTok').value = s.maxTokens;
+    $('setStrict').value = s.strictJson || 'auto';
     $('setAframe').value = s.aframeVersion;
     $('setLang').value = s.language || I18n.getLang();
     $('setTestResult').textContent = '';
@@ -650,7 +679,8 @@
       temperature: $('setTemp').value.trim() === '' ? '' : (Number($('setTemp').value) || 0.4),
       maxTokens: $('setMaxTok').value.trim() === '' ? '' : (Number($('setMaxTok').value) || 16384),
       aframeVersion: $('setAframe').value.trim() || '1.8.0',
-      language: $('setLang').value
+      language: $('setLang').value,
+      strictJson: $('setStrict').value
     };
   }
 

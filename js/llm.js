@@ -8,7 +8,8 @@
     temperature: 0.4,
     maxTokens: 16384,
     aframeVersion: '1.8.0',
-    language: 'en'
+    language: 'en',
+    strictJson: 'auto' // 'auto' | 'on' | 'off' — send response_format json_schema (grammar-constrained output)
   };
 
   function settings() {
@@ -51,26 +52,45 @@
     localStorage.setItem('diyw_settings', JSON.stringify(s));
   }
 
+  // Endpoints that rejected response_format (auto mode remembers and stops sending it).
+  var rfBlocked = {};
+
   /* Stream a chat completion.
    * messages: [{role, content}]
    * onDelta(textChunk, fullTextSoFar), returns Promise<fullText>.
+   * opts.responseSchema: JSON Schema — sent as response_format json_schema when strictJson allows.
    * Returns an object {promise, abort} */
-  function chat(messages, onDelta) {
+  function chat(messages, onDelta, opts) {
+    opts = opts || {};
     var s = settings();
     var ctrl = new AbortController();
-    var promise = resolveModel().then(function (model) {
+    var useRF = !!opts.responseSchema && s.strictJson !== 'off' &&
+                !(s.strictJson === 'auto' && rfBlocked[s.endpoint]);
+
+    function doFetch(model, withRF) {
+      var body = { messages: messages, stream: true };
+      if (model) body.model = model;
+      // Only send sampling params that are explicitly set; otherwise the server defaults apply.
+      if (s.temperature !== '' && isFinite(Number(s.temperature))) body.temperature = Number(s.temperature);
+      if (s.maxTokens !== '' && isFinite(Number(s.maxTokens))) body.max_tokens = Number(s.maxTokens);
+      if (withRF) body.response_format = { type: 'json_schema', json_schema: { name: 'envelope', schema: opts.responseSchema } };
       return fetch(s.endpoint.replace(/\/+$/, '') + '/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: ctrl.signal,
-        body: JSON.stringify((function () {
-          var body = { messages: messages, stream: true };
-          if (model) body.model = model;
-          // Only send sampling params that are explicitly set; otherwise the server defaults apply.
-          if (s.temperature !== '' && isFinite(Number(s.temperature))) body.temperature = Number(s.temperature);
-          if (s.maxTokens !== '' && isFinite(Number(s.maxTokens))) body.max_tokens = Number(s.maxTokens);
-          return body;
-        })())
+        body: JSON.stringify(body)
+      });
+    }
+
+    var promise = resolveModel().then(function (model) {
+      return doFetch(model, useRF).then(function (res) {
+        if (!res.ok && useRF && s.strictJson === 'auto') {
+          // Server likely doesn't support response_format — remember and retry once without.
+          rfBlocked[s.endpoint] = true;
+          if (window.Debug) Debug.log('warn', 'llm', 'response_format rejected (HTTP ' + res.status + '), retrying without. Strict JSON disabled for this endpoint.');
+          return doFetch(model, false);
+        }
+        return res;
       });
     }).then(function (res) {
       if (!res.ok) {

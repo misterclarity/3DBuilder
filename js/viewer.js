@@ -20,7 +20,14 @@
   var partEls = {}, jointEls = {};
   var dragDist = 0, downPos = null;
 
-  var JOINT_COLORS = { hinge: '#ff9800', screw: '#90a4ae', bolt: '#546e7a', dowel: '#d7a97f', glue: '#eceff1', nail: '#b0bec5', bracket: '#78909c' };
+  var JOINT_COLORS = {
+    hinge: '#ff9800', screw: '#90a4ae', bolt: '#546e7a', dowel: '#d7a97f', glue: '#eceff1',
+    nail: '#b0bec5', bracket: '#78909c', pocket_hole: '#8d6e63', biscuit: '#d7ccc8', domino: '#bcaaa4',
+    dado: '#4db6ac', groove: '#26a69a', rabbet: '#00897b', lap: '#5c6bc0',
+    mortise_tenon: '#7e57c2', dovetail: '#ab47bc', miter: '#789fa5', other: '#90a4ae'
+  };
+  // Housed / machined joints get a flat box marker instead of a sphere.
+  var HOUSED_JOINTS = { dado: 1, groove: 1, rabbet: 1, lap: 1, mortise_tenon: 1, dovetail: 1, miter: 1 };
 
   // ---------- component registration ----------
   function registerComponents() {
@@ -76,26 +83,52 @@
             self.radius = Math.min(30, Math.max(0.3, self.radius * (1 + e.deltaY * 0.0012)));
             self.update3D();
           }, { passive: false });
-          // touch: one finger orbit, two finger pinch zoom
+          // touch: one finger orbit, two fingers pinch-zoom + pan, tap = select
           var touches = {};
-          canvas.addEventListener('touchstart', function (e) { for (var i = 0; i < e.touches.length; i++) touches[e.touches[i].identifier] = { x: e.touches[i].clientX, y: e.touches[i].clientY }; self.pinch = null; });
+          canvas.addEventListener('touchstart', function (e) {
+            for (var i = 0; i < e.touches.length; i++) touches[e.touches[i].identifier] = { x: e.touches[i].clientX, y: e.touches[i].clientY };
+            self.pinch = null; self.mid = null;
+            if (e.touches.length === 1) {
+              downPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+              dragDist = 0;                 // so a clean tap registers as a click/select
+            } else {
+              dragDist = 100;               // multi-finger gestures are never taps
+            }
+          }, { passive: true });
           canvas.addEventListener('touchmove', function (e) {
             e.preventDefault();
             if (e.touches.length === 1) {
               var t = e.touches[0], prev = touches[t.identifier];
               if (prev) {
-                self.azimuth -= (t.clientX - prev.x) * 0.006;
-                self.polar = Math.min(Math.PI - 0.08, Math.max(0.08, self.polar - (t.clientY - prev.y) * 0.006));
+                var dx = t.clientX - prev.x, dy = t.clientY - prev.y;
+                dragDist += Math.abs(dx) + Math.abs(dy);
+                self.azimuth -= dx * 0.006;
+                self.polar = Math.min(Math.PI - 0.08, Math.max(0.08, self.polar - dy * 0.006));
               }
               touches[t.identifier] = { x: t.clientX, y: t.clientY };
             } else if (e.touches.length === 2) {
-              var d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+              var t0 = e.touches[0], t1 = e.touches[1];
+              var d = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+              var mid = { x: (t0.clientX + t1.clientX) / 2, y: (t0.clientY + t1.clientY) / 2 };
               if (self.pinch) self.radius = Math.min(30, Math.max(0.3, self.radius * (self.pinch / d)));
-              self.pinch = d;
+              if (self.mid) {
+                // two-finger drag pans the view
+                var cam = self.el.object3D;
+                var right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+                var up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+                var k = self.radius * 0.0012;
+                self.target.addScaledVector(right, -(mid.x - self.mid.x) * k);
+                self.target.addScaledVector(up, (mid.y - self.mid.y) * k);
+              }
+              self.pinch = d; self.mid = mid;
             }
             self.update3D();
           }, { passive: false });
-          canvas.addEventListener('touchend', function () { touches = {}; self.pinch = null; });
+          canvas.addEventListener('touchend', function (e) {
+            touches = {};
+            self.pinch = null; self.mid = null;
+            if (e.touches.length) dragDist = 100;  // lifted one of two fingers — still not a tap
+          });
         });
       },
       update3D: function () {
@@ -254,7 +287,9 @@
     var isHinge = j.type === 'hinge';
     el.setAttribute('geometry', isHinge
       ? { primitive: 'cylinder', radius: 0.014, height: 0.06, segmentsRadial: 12 }
-      : { primitive: 'sphere', radius: 0.013, segmentsWidth: 12, segmentsHeight: 10 });
+      : HOUSED_JOINTS[j.type]
+        ? { primitive: 'box', width: 0.034, height: 0.014, depth: 0.034 }
+        : { primitive: 'sphere', radius: 0.013, segmentsWidth: 12, segmentsHeight: 10 });
     el.setAttribute('material', { shader: 'standard', color: JOINT_COLORS[j.type] || '#90a4ae', metalness: 0.6, roughness: 0.35, emissive: JOINT_COLORS[j.type] || '#90a4ae', emissiveIntensity: 0.12 });
     el.setAttribute('position', vec(j.position));
     el.addEventListener('click', function () {

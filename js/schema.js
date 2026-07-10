@@ -7,6 +7,10 @@
 
   var SCHEMA_VERSION = 1;
 
+  // Joinery vocabulary. Housed/machined joints require matching prep operations on the machined part(s).
+  var JOINT_TYPES = ['screw', 'bolt', 'nail', 'glue', 'bracket', 'hinge', 'dowel', 'biscuit', 'domino',
+    'pocket_hole', 'dado', 'groove', 'rabbet', 'lap', 'mortise_tenon', 'dovetail', 'miter', 'other'];
+
   // Human/AI readable schema description (embedded into the LLM system prompt).
   var SCHEMA_DOC = [
     'DESIGN JSON SCHEMA (all lengths in millimeters, y-up, floor at y=0, positions are part CENTERS):',
@@ -26,9 +30,10 @@
     '    "prep": { "operations": [ {"type": "cut"|"drill"|"sand"|"route"|"plane"|"other", "instruction": str} ],',
     '              "notes": str (optional) }',
     '  } ],',
-    '  "joints": [ { "id": str, "type": "screw"|"hinge"|"dowel"|"glue"|"bolt"|"nail"|"bracket",',
+    '  "joints": [ { "id": str, "type": "screw"|"bolt"|"nail"|"glue"|"bracket"|"hinge"|"dowel"|"biscuit"|"domino"|',
+    '                        "pocket_hole"|"dado"|"groove"|"rabbet"|"lap"|"mortise_tenon"|"dovetail"|"miter",',
     '                "parts": [partId, partId], "position": {"x","y","z"} (mm, marker location),',
-    '                "note": str (e.g. "3x wood screws 4x50mm") } ],',
+    '                "note": str (e.g. "3x wood screws 4x50mm", "dado 18mm wide x 8mm deep") } ],',
     '  "hardware": [ { "name": str, "quantity": int, "note": str (optional) } ],',
     '  "assembly": [ { "step": int (1-based, ordered), "title": str, "instruction": str (detailed),',
     '                  "parts": [partId...] (parts added in this step), "joints": [jointId...] (optional) } ],',
@@ -120,8 +125,13 @@
       if (!j || !Array.isArray(j.parts)) return;
       var jp = j.parts.map(function (pid) { return slug(pid, 0); }).filter(function (pid) { return ids[pid]; });
       if (jp.length < 1) { warnings.push('Joint #' + i + ' references unknown parts, skipped'); return; }
+      var jtype = String(j.type || 'screw').toLowerCase().replace(/[\s-]+/g, '_');
+      if (JOINT_TYPES.indexOf(jtype) < 0) {
+        warnings.push('Joint #' + i + ' has unknown type "' + j.type + '" (kept as "other")');
+        jtype = 'other';
+      }
       d.joints.push({
-        id: slug(j.id || ('joint_' + i), i), type: j.type || 'screw', parts: jp,
+        id: slug(j.id || ('joint_' + i), i), type: jtype, parts: jp,
         position: j.position ? normVec(j.position, 0) : null,
         note: j.note || ''
       });
@@ -389,10 +399,132 @@
     return { notouch: notouch, moved: moved };
   }
 
+  /* ---------- patch application (diff-based AI edits) ----------
+   * Applies part-level ops to a deep copy of the design. The result must still
+   * be run through validate(). Returns { design, notes[] }. */
+  function applyPatch(base, ops) {
+    var d = JSON.parse(JSON.stringify(base));
+    d.joints = d.joints || []; d.hardware = d.hardware || [];
+    d.assembly = d.assembly || []; d.finishing = d.finishing || [];
+    var notes = [];
+
+    function merge(target, src) {
+      if (!src || typeof src !== 'object') return;
+      Object.keys(src).forEach(function (k) { target[k] = src[k]; });
+    }
+    function mergePart(p, set) {
+      if (!set) return;
+      Object.keys(set).forEach(function (k) {
+        var nested = (k === 'dimensions' || k === 'position' || k === 'rotation' || k === 'material');
+        if (nested && set[k] && typeof set[k] === 'object' && p[k] && typeof p[k] === 'object') merge(p[k], set[k]);
+        else p[k] = set[k];
+      });
+    }
+    function findPart(id) { return d.parts.find(function (p) { return p.id === id; }); }
+
+    (Array.isArray(ops) ? ops : []).forEach(function (o) {
+      if (!o || !o.op) return;
+      switch (o.op) {
+        case 'update_meta':
+          merge(d.meta, o.set);
+          break;
+        case 'add_part':
+          if (o.part) d.parts.push(o.part);
+          break;
+        case 'remove_part':
+          d.parts = d.parts.filter(function (p) { return p.id !== o.id; });
+          d.joints = d.joints.filter(function (j) { return (j.parts || []).indexOf(o.id) < 0; });
+          d.assembly.forEach(function (s) { s.parts = (s.parts || []).filter(function (x) { return x !== o.id; }); });
+          break;
+        case 'update_part':
+          var p = findPart(o.id);
+          if (p) mergePart(p, o.set);
+          else notes.push('patch: unknown part "' + o.id + '"');
+          break;
+        case 'add_joint':
+          if (o.joint) d.joints.push(o.joint);
+          break;
+        case 'update_joint':
+          var j = d.joints.find(function (x) { return x.id === o.id; });
+          if (j) merge(j, o.set);
+          else notes.push('patch: unknown joint "' + o.id + '"');
+          break;
+        case 'remove_joint':
+          d.joints = d.joints.filter(function (x) { return x.id !== o.id; });
+          d.assembly.forEach(function (s) { if (s.joints) s.joints = s.joints.filter(function (x) { return x !== o.id; }); });
+          break;
+        case 'set_hardware': d.hardware = Array.isArray(o.hardware) ? o.hardware : []; break;
+        case 'set_assembly': d.assembly = Array.isArray(o.assembly) ? o.assembly : []; break;
+        case 'set_finishing': d.finishing = Array.isArray(o.finishing) ? o.finishing : []; break;
+        default: notes.push('patch: unknown op "' + o.op + '"');
+      }
+    });
+    return { design: d, notes: notes };
+  }
+
+  /* ---------- JSON Schema of the response envelope (for response_format json_schema) ----------
+   * All object properties are declared explicitly because some servers (llama.cpp)
+   * compile schemas to grammars that disallow undeclared keys. */
+  var J_VEC = { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } }, required: ['x', 'y', 'z'] };
+  var J_MATERIAL = { type: 'object', properties: {
+    species: { type: 'string' }, color: { type: ['string', 'null'] },
+    finish: { enum: ['raw', 'painted', 'stained', 'varnished'] },
+    shine: { type: 'number' }, grainDirection: { enum: ['x', 'y', 'z'] }
+  } };
+  var J_PREP = { type: 'object', properties: {
+    operations: { type: 'array', items: { type: 'object', properties: {
+      type: { type: 'string' }, instruction: { type: 'string' } }, required: ['type', 'instruction'] } },
+    notes: { type: 'string' }
+  } };
+  var J_PART_PROPS = {
+    id: { type: 'string' }, name: { type: 'string' }, shape: { enum: ['box', 'cylinder'] },
+    dimensions: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' }, radius: { type: 'number' }, height: { type: 'number' } } },
+    position: J_VEC, rotation: J_VEC, material: J_MATERIAL, stock: { type: 'string' }, prep: J_PREP
+  };
+  var J_PART = { type: 'object', properties: J_PART_PROPS, required: ['id', 'name', 'shape', 'dimensions', 'position'] };
+  var J_PART_SET = { type: 'object', properties: J_PART_PROPS };
+  var J_JOINT = { type: 'object', properties: {
+    id: { type: 'string' }, type: { enum: JOINT_TYPES },
+    parts: { type: 'array', items: { type: 'string' } }, position: J_VEC, note: { type: 'string' }
+  }, required: ['id', 'type', 'parts'] };
+  var J_HARDWARE = { type: 'object', properties: { name: { type: 'string' }, quantity: { type: 'integer' }, note: { type: 'string' } }, required: ['name', 'quantity'] };
+  var J_STEP = { type: 'object', properties: {
+    step: { type: 'integer' }, title: { type: 'string' }, instruction: { type: 'string' },
+    parts: { type: 'array', items: { type: 'string' } }, joints: { type: 'array', items: { type: 'string' } }
+  }, required: ['step', 'title', 'instruction', 'parts'] };
+  var J_FINISH = { type: 'object', properties: {
+    step: { type: 'integer' }, title: { type: 'string' }, instruction: { type: 'string' },
+    parts: { type: 'array', items: { type: 'string' } }
+  }, required: ['step', 'title', 'instruction'] };
+  var J_DESIGN = { type: 'object', properties: {
+    meta: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, units: { type: 'string' } }, required: ['name'] },
+    parts: { type: 'array', items: J_PART },
+    joints: { type: 'array', items: J_JOINT },
+    hardware: { type: 'array', items: J_HARDWARE },
+    assembly: { type: 'array', items: J_STEP },
+    finishing: { type: 'array', items: J_FINISH }
+  }, required: ['meta', 'parts', 'assembly'] };
+  var J_OP = { type: 'object', properties: {
+    op: { enum: ['update_meta', 'add_part', 'remove_part', 'update_part', 'add_joint', 'update_joint', 'remove_joint', 'set_hardware', 'set_assembly', 'set_finishing'] },
+    id: { type: 'string' }, set: J_PART_SET, part: J_PART, joint: J_JOINT,
+    hardware: { type: 'array', items: J_HARDWARE },
+    assembly: { type: 'array', items: J_STEP },
+    finishing: { type: 'array', items: J_FINISH }
+  }, required: ['op'] };
+  var ENVELOPE_SCHEMA = { anyOf: [
+    { type: 'object', properties: { type: { enum: ['design'] }, scope: { enum: ['new', 'modify'] }, summary: { type: 'string' }, design: J_DESIGN }, required: ['type', 'design'] },
+    { type: 'object', properties: { type: { enum: ['patch'] }, summary: { type: 'string' }, ops: { type: 'array', items: J_OP } }, required: ['type', 'ops'] },
+    { type: 'object', properties: { type: { enum: ['clarify'] }, message: { type: 'string' }, questions: { type: 'array', items: { type: 'string' } } }, required: ['type', 'questions'] },
+    { type: 'object', properties: { type: { enum: ['chat'] }, message: { type: 'string' } }, required: ['type', 'message'] }
+  ] };
+
   window.Schema = {
     VERSION: SCHEMA_VERSION,
     DOC: SCHEMA_DOC,
+    JOINT_TYPES: JOINT_TYPES,
+    ENVELOPE: ENVELOPE_SCHEMA,
     validate: validate,
+    applyPatch: applyPatch,
     cutList: cutList,
     dimsLabel: dimsLabel,
     auditJoints: auditJoints,
