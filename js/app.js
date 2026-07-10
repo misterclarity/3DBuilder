@@ -548,7 +548,8 @@
     if (!p) { $('partCard').classList.add('hidden'); return; }
     $('pcName').textContent = p.name;
     var joints = (currentDesign.joints || []).filter(function (j) { return j.parts.indexOf(p.id) >= 0; });
-    var html = '<div class="kv">' + t('pc.dimensions') + ': <b>' + Schema.dimsLabel(p) + '</b></div>' +
+    var html = '<div class="kv">' + t('pc.dimensions') + ': <b>' + Schema.dimsLabel(p) +
+      ((p.cutouts && p.cutouts.length) ? ' · ' + p.cutouts.length + '× Ø' + Math.round(p.cutouts[0].diameter) + ' mm' : '') + '</b></div>' +
       '<div class="kv">' + t('pc.stock') + ': ' + esc(p.stock || '—') + ' · ' + t('pc.material') + ': ' + esc(p.material.species) + ' (' + esc(p.material.finish) + ')</div>' +
       '<div class="kv" style="margin-top:6px"><b>' + t('pc.prep') + '</b></div><ul>';
     p.prep.operations.forEach(function (o) { html += '<li><b>' + esc(o.type) + '</b> — ' + esc(o.instruction) + '</li>'; });

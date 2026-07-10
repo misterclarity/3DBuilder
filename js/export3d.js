@@ -58,7 +58,7 @@
 
   function build(design) {
     var obj = ['# DIY Workshop export — ' + (design.meta.name || 'design'), 'mtllib design.mtl', ''];
-    var mtl = ['# DIY Workshop materials', ''];
+    var mtl = ['# DIY Workshop materials', '', 'newmtl m_hole', 'Kd 0.08 0.09 0.10', 'Ns 10', 'd 1.0', ''];
     var base = 0;
     (design.parts || []).forEach(function (p) {
       var color = p.material.color || (window.Materials && Materials.baseColor ? Materials.baseColor(p.material.species) : '#d9b380');
@@ -75,6 +75,25 @@
       });
       base += g.v.length;
       obj.push('');
+
+      // Cutout markers: dark cylinders through the part (viewers without CSG
+      // still show where the holes go; drill the real holes per the cut list).
+      (p.cutouts || []).forEach(function (co, ci) {
+        var g2 = cylGeom({ radius: co.diameter / 2, height: (p.dimensions[co.axis] || 10) + 1 });
+        var pre = co.axis === 'x' ? { z: 90 } : (co.axis === 'z' ? { x: 90 } : {});
+        obj.push('o ' + p.id + '_hole' + (ci + 1), 'usemtl m_hole');
+        g2.v.forEach(function (vv) {
+          var w = rotate(vv, pre);
+          w = [w[0] + co.offset.x, w[1] + co.offset.y, w[2] + co.offset.z];
+          w = rotate(w, p.rotation || {});
+          obj.push('v ' + (w[0] + p.position.x).toFixed(2) + ' ' + (w[1] + p.position.y).toFixed(2) + ' ' + (w[2] + p.position.z).toFixed(2));
+        });
+        g2.f.forEach(function (fc) {
+          obj.push('f ' + fc.map(function (i) { return i + base; }).join(' '));
+        });
+        base += g2.v.length;
+        obj.push('');
+      });
     });
     return { obj: obj.join('\n'), mtl: mtl.join('\n') };
   }

@@ -266,6 +266,18 @@
     el.setAttribute('shadow', 'cast: true; receive: true');
     setTransform(el, modelPos(p), p.rotation, false);
 
+    // Cutouts: rendered as dark disks slightly proud of both faces (no CSG in A-Frame).
+    (p.cutouts || []).forEach(function (co) {
+      var h = document.createElement('a-entity');
+      var th = ((p.dimensions[co.axis] || 10) + 2) * S;
+      h.setAttribute('geometry', { primitive: 'cylinder', radius: co.diameter / 2 * S, height: th, segmentsRadial: 28 });
+      h.setAttribute('material', { shader: 'flat', color: '#14181c' });
+      h.setAttribute('position', (co.offset.x * S) + ' ' + (co.offset.y * S) + ' ' + (co.offset.z * S));
+      if (co.axis === 'x') h.setAttribute('rotation', '0 0 90');
+      else if (co.axis === 'z') h.setAttribute('rotation', '90 0 0');
+      el.appendChild(h);   // child: follows the part through all modes/animations
+    });
+
     el.addEventListener('mouseenter', function () { hovered = p.id; refreshVisual(p.id); if (cb.onHover) cb.onHover(p.id); });
     el.addEventListener('mouseleave', function () { if (hovered === p.id) hovered = null; refreshVisual(p.id); if (cb.onHover) cb.onHover(null); });
     el.addEventListener('click', function (evt) {

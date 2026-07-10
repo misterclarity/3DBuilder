@@ -26,6 +26,10 @@
     '    "material": { "species": e.g. "pine"|"oak"|"plywood"|"metal", "color": "#hex" (optional),',
     '                  "finish": "raw"|"painted"|"stained"|"varnished", "shine": 0..1,',
     '                  "grainDirection": "x"|"y"|"z" (longest axis of the wood grain) },',
+    '    "cutouts": [ { "shape": "circle", "diameter": mm, "axis": "x"|"y"|"z" (hole direction, default: thinnest dimension),',
+    '                   "offset": {"x": mm, "y": mm, "z": mm} (hole center relative to the PART CENTER; component along "axis" ignored) } ]',
+    '                 (optional — REQUIRED for every physical through-hole such as bowl cutouts, hand slots, cable holes;',
+    '                  also add a matching drill/route prep operation),',
     '    "stock": str (what to buy/cut from, e.g. "45x95mm construction lumber" or "18mm plywood"),',
     '    "prep": { "operations": [ {"type": "cut"|"drill"|"sand"|"route"|"plane"|"other", "instruction": str} ],',
     '              "notes": str (optional) }',
@@ -102,11 +106,29 @@
         warnings.push('Part "' + id + '" had no prep operations; default cut added');
         ops = [{ type: 'cut', instruction: 'Cut to size from stock: ' + dimsLabel({ shape: shape, dimensions: dims }) + '.' }];
       }
+      // Cutouts: circular through-holes in box parts.
+      var cuts = [];
+      (Array.isArray(p.cutouts) ? p.cutouts : []).forEach(function (co, ci) {
+        if (!co) return;
+        var dia = Math.max(0, num(co.diameter, 0) || num(co.radius, 0) * 2);
+        if (!dia || shape !== 'box') { warnings.push('Cutout #' + ci + ' on "' + id + '" invalid, skipped'); return; }
+        var axis = /^[xyz]$/.test(co.axis) ? co.axis : thinnestAxis(dims);
+        var off = normVec(co.offset || co.position, 0);
+        off[axis] = 0;
+        ['x', 'y', 'z'].forEach(function (ax) {
+          if (ax === axis) return;
+          var lim = Math.max(0, dims[ax] / 2 - dia / 2);
+          if (off[ax] > lim) { off[ax] = lim; warnings.push('Cutout on "' + id + '" moved inside the part'); }
+          if (off[ax] < -lim) { off[ax] = -lim; warnings.push('Cutout on "' + id + '" moved inside the part'); }
+        });
+        cuts.push({ shape: 'circle', diameter: dia, axis: axis, offset: off });
+      });
       d.parts.push({
         id: id,
         name: p.name || id,
         shape: shape,
         dimensions: dims,
+        cutouts: cuts,
         position: normVec(p.position, 0),
         rotation: normVec(p.rotation, 0),
         material: {
@@ -197,6 +219,11 @@
     });
 
     return { ok: errors.length === 0, design: d, errors: errors, warnings: warnings };
+  }
+
+  function thinnestAxis(dims) {
+    var m = Math.min(dims.x, dims.y, dims.z);
+    return m === dims.y ? 'y' : (m === dims.x ? 'x' : 'z');
   }
 
   function longestAxis(shape, dims) {
@@ -373,21 +400,8 @@
     var byId = {};
     (design.parts || []).forEach(function (p) { byId[p.id] = p; });
 
-    function bounds(p) {
-      var c = p.position, half;
-      if (p.shape === 'cylinder') half = { x: p.dimensions.radius, y: p.dimensions.height / 2, z: p.dimensions.radius };
-      else half = { x: p.dimensions.x / 2, y: p.dimensions.y / 2, z: p.dimensions.z / 2 };
-      var rotated = p.rotation && (p.rotation.x || p.rotation.y || p.rotation.z);
-      if (rotated) {
-        // Loose bound for rotated parts: bounding sphere as cube.
-        var r = Math.sqrt(half.x * half.x + half.y * half.y + half.z * half.z);
-        half = { x: r, y: r, z: r };
-      }
-      return {
-        min: { x: c.x - half.x, y: c.y - half.y, z: c.z - half.z },
-        max: { x: c.x + half.x, y: c.y + half.y, z: c.z + half.z }
-      };
-    }
+    // Tight AABB (rotation-aware) — shared with the lint helpers.
+    function bounds(p) { return partBounds(p); }
 
     var notouch = [], moved = 0;
     (design.joints || []).forEach(function (j) {
@@ -427,18 +441,46 @@
   /* ---------- geometry cleanup & lints ---------- */
   function isRotated(p) { return !!(p.rotation && (p.rotation.x || p.rotation.y || p.rotation.z)); }
 
+  // Steep rotations get exempted from box-based checks; shallow ones (slanted
+  // tops etc.) have near-tight AABBs and are checked like axis-aligned parts.
+  function bigRot(p) {
+    var r = p.rotation || {};
+    return Math.max(Math.abs(r.x || 0), Math.abs(r.y || 0), Math.abs(r.z || 0)) > 15;
+  }
+
+  // YXZ Euler rotation (matches A-Frame/THREE entity order).
+  function rotatePt(v, rot) {
+    var DEG = Math.PI / 180;
+    var rx = (rot.x || 0) * DEG, ry = (rot.y || 0) * DEG, rz = (rot.z || 0) * DEG;
+    var x = v[0], y = v[1], z = v[2], c, s, t0, t1;
+    c = Math.cos(rz); s = Math.sin(rz); t0 = x * c - y * s; t1 = x * s + y * c; x = t0; y = t1;
+    c = Math.cos(rx); s = Math.sin(rx); t0 = y * c - z * s; t1 = y * s + z * c; y = t0; z = t1;
+    c = Math.cos(ry); s = Math.sin(ry); t0 = z * s + x * c; t1 = z * c - x * s; x = t0; z = t1;
+    return [x, y, z];
+  }
+
   function partBounds(p) {
     var half;
     if (p.shape === 'cylinder') half = { x: p.dimensions.radius, y: p.dimensions.height / 2, z: p.dimensions.radius };
     else half = { x: p.dimensions.x / 2, y: p.dimensions.y / 2, z: p.dimensions.z / 2 };
-    if (isRotated(p)) {
-      var r = Math.sqrt(half.x * half.x + half.y * half.y + half.z * half.z);
-      half = { x: r, y: r, z: r };
-    }
     var c = p.position;
+    if (!isRotated(p)) {
+      return {
+        min: { x: c.x - half.x, y: c.y - half.y, z: c.z - half.z },
+        max: { x: c.x + half.x, y: c.y + half.y, z: c.z + half.z }
+      };
+    }
+    // Exact AABB of the rotated box: transform all 8 corners.
+    var min = { x: 1e12, y: 1e12, z: 1e12 }, max = { x: -1e12, y: -1e12, z: -1e12 };
+    [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]].forEach(function (sg) {
+      var w = rotatePt([sg[0] * half.x, sg[1] * half.y, sg[2] * half.z], p.rotation);
+      min.x = Math.min(min.x, w[0]); max.x = Math.max(max.x, w[0]);
+      min.y = Math.min(min.y, w[1]); max.y = Math.max(max.y, w[1]);
+      min.z = Math.min(min.z, w[2]); max.z = Math.max(max.z, w[2]);
+    });
     return {
-      min: { x: c.x - half.x, y: c.y - half.y, z: c.z - half.z },
-      max: { x: c.x + half.x, y: c.y + half.y, z: c.z + half.z }
+      min: { x: c.x + min.x, y: c.y + min.y, z: c.z + min.z },
+      max: { x: c.x + max.x, y: c.y + max.y, z: c.z + max.z }
     };
   }
 
@@ -470,7 +512,7 @@
     (d.joints || []).forEach(function (j) {
       if (!j.parts || j.parts.length < 2) return;
       var a = byId[j.parts[0]], b = byId[j.parts[1]];
-      if (!a || !b || isRotated(a) || isRotated(b)) return;
+      if (!a || !b || bigRot(a) || bigRot(b)) return;
       var ba = partBounds(a), bb = partBounds(b);
       var sepAxis = null, sep = 0, n = 0;
       ['x', 'y', 'z'].forEach(function (ax) {
@@ -503,7 +545,7 @@
 
     // 1. below floor
     parts.forEach(function (p) {
-      if (isRotated(p)) return;
+      if (bigRot(p)) return;
       var b = partBounds(p);
       if (b.min.y < -1) issues.push('Part "' + p.id + '" extends ' + Math.round(-b.min.y) + ' mm below the floor (y=0).');
     });
@@ -530,7 +572,7 @@
     // 2. support: BFS from grounded parts (bottom within 2 mm of the floor)
     var grounded = {}, queue = [];
     parts.forEach(function (p) {
-      if (isRotated(p) || partBounds(p).min.y <= 2) { grounded[p.id] = true; queue.push(p.id); }
+      if (bigRot(p) || partBounds(p).min.y <= 2) { grounded[p.id] = true; queue.push(p.id); }
     });
     while (queue.length) {
       var cur = queue.pop();
@@ -556,10 +598,12 @@
     for (i = 0; i < parts.length; i++) {
       for (k = i + 1; k < parts.length; k++) {
         var a = parts[i], b = parts[k];
-        if (isRotated(a) || isRotated(b)) continue;
+        if (bigRot(a) || bigRot(b)) continue;
         var jt = joined[a.id + '|' + b.id];
         if (jt && HOUSED[jt]) continue;      // housed joints (incl. through-tenons) interpenetrate by design
-        var allow = jt ? 45 : 6;             // joined parts model their joinery as overlap — give them slack
+        // Joined parts model their joinery as overlap — give them slack.
+        // Slightly rotated parts get extra tolerance for their AABB slop.
+        var allow = (jt ? 45 : 6) + ((isRotated(a) || isRotated(b)) ? 5 : 0);
         var ba = partBounds(a), bb = partBounds(b);
         var pen = 1e9, over = true, ovol = 1;
         ['x', 'y', 'z'].forEach(function (ax) {
@@ -604,7 +648,7 @@
       for (var si = 1; si < steps.length; si++) {
         (steps[si].parts || []).forEach(function (pid) {
           var p = byId[pid];
-          if (p && !isRotated(p)) {
+          if (p && !bigRot(p)) {
             var connected = partBounds(p).min.y <= 2;
             if (!connected) (adj[pid] || []).forEach(function (nid) { if (placed[nid]) connected = true; });
             if (!connected && buildIssues < 3) {
@@ -647,7 +691,7 @@
       var best = null;
       (d.parts || []).forEach(function (c) {
         if (c.id === keep.id || c.id === excludeId) return;
-        if (isRotated(c)) return; // loose bounds of rotated parts phantom-touch everything
+        if (bigRot(c)) return; // steeply rotated parts have loose bounds — avoid phantom contacts
         var cc = contactCenter(keep, c, ref);
         if (cc && (!best || cc.dist < best.dist)) best = { id: c.id, center: cc.center, dist: cc.dist };
       });
@@ -758,7 +802,11 @@
   var J_PART_PROPS = {
     id: { type: 'string' }, name: { type: 'string' }, shape: { enum: ['box', 'cylinder'] },
     dimensions: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' }, radius: { type: 'number' }, height: { type: 'number' } } },
-    position: J_VEC, rotation: J_VEC, material: J_MATERIAL, stock: { type: 'string' }, prep: J_PREP
+    position: J_VEC, rotation: J_VEC, material: J_MATERIAL, stock: { type: 'string' }, prep: J_PREP,
+    cutouts: { type: 'array', items: { type: 'object', properties: {
+      shape: { enum: ['circle'] }, diameter: { type: 'number' }, axis: { enum: ['x', 'y', 'z'] },
+      offset: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } }
+    }, required: ['shape', 'diameter'] } }
   };
   var J_PART = { type: 'object', properties: J_PART_PROPS, required: ['id', 'name', 'shape', 'dimensions', 'position'] };
   var J_PART_SET = { type: 'object', properties: J_PART_PROPS };

@@ -224,12 +224,34 @@
       var xSide = x0 + frontW + GAP;
 
       // Views (far-first painter's order)
-      drawView(doc, projectView(design, { u: 'x', v: 'z', d: 'y' }),
-        { x: xFront, y: yTopView, s: s, umin: b.min.x, vmin: b.min.z, vmax: b.max.z, flipV: false });
-      drawView(doc, projectView(design, { u: 'x', v: 'y', d: 'z' }),
-        { x: xFront, y: yFront, s: s, umin: b.min.x, vmin: b.min.y, vmax: b.max.y, flipV: true });
-      drawView(doc, projectView(design, { u: 'z', v: 'y', d: 'x' }),
-        { x: xSide, y: yFront, s: s, umin: b.min.z, vmin: b.min.y, vmax: b.max.y, flipV: true });
+      var axTop = { u: 'x', v: 'z', d: 'y' }, oTop = { x: xFront, y: yTopView, s: s, umin: b.min.x, vmin: b.min.z, vmax: b.max.z, flipV: false };
+      var axFront = { u: 'x', v: 'y', d: 'z' }, oFront = { x: xFront, y: yFront, s: s, umin: b.min.x, vmin: b.min.y, vmax: b.max.y, flipV: true };
+      var axSide = { u: 'z', v: 'y', d: 'x' }, oSide = { x: xSide, y: yFront, s: s, umin: b.min.z, vmin: b.min.y, vmax: b.max.y, flipV: true };
+      drawView(doc, projectView(design, axTop), oTop);
+      drawView(doc, projectView(design, axFront), oFront);
+      drawView(doc, projectView(design, axSide), oSide);
+
+      // Cutouts: draw hole circles in the view that looks along the hole axis.
+      function drawCutouts(axes, o) {
+        design.parts.forEach(function (p) {
+          (p.cutouts || []).forEach(function (co) {
+            if (co.axis !== axes.d) return;
+            var u = p.position[axes.u] + (co.offset[axes.u] || 0);
+            var v = p.position[axes.v] + (co.offset[axes.v] || 0);
+            var U = o.x + (u - o.umin) * o.s;
+            var V = o.flipV ? o.y + (o.vmax - v) * o.s : o.y + (v - o.vmin) * o.s;
+            doc.setDrawColor(45, 45, 45);
+            doc.setLineWidth(0.25);
+            doc.circle(U, V, co.diameter / 2 * o.s, 'S');
+            doc.setFontSize(7);
+            doc.setTextColor(60);
+            doc.text('Ø' + Math.round(co.diameter), U, V + 1, { align: 'center' });
+          });
+        });
+      }
+      drawCutouts(axTop, oTop);
+      drawCutouts(axFront, oFront);
+      drawCutouts(axSide, oSide);
 
       // Labels
       doc.setFontSize(9); doc.setTextColor(80);
