@@ -141,11 +141,9 @@
       if (h && h.name) d.hardware.push({ name: String(h.name), quantity: Math.max(1, Math.round(num(h.quantity, 1))), note: h.note || '' });
     });
 
-    var covered = {};
     (Array.isArray(input.assembly) ? input.assembly : []).forEach(function (s, i) {
       if (!s) return;
       var sp = (Array.isArray(s.parts) ? s.parts : []).map(function (pid) { return slug(pid, 0); }).filter(function (pid) { return ids[pid]; });
-      sp.forEach(function (pid) { covered[pid] = true; });
       d.assembly.push({
         step: d.assembly.length + 1,
         title: s.title || ('Step ' + (i + 1)),
@@ -154,6 +152,33 @@
         joints: (Array.isArray(s.joints) ? s.joints : []).map(function (jid) { return slug(jid, 0); })
       });
     });
+
+    // Normalize step membership so the assembly view builds up correctly:
+    // a part belongs to the step where it is ADDED, exactly once.
+    // 1. Strip "bulk" steps ("cut all parts" style) that list nearly every part
+    //    when those parts are also assigned to other steps.
+    var totalParts = d.parts.length;
+    if (d.assembly.length > 2 && totalParts >= 4) {
+      d.assembly.forEach(function (s) {
+        if (s.parts.length < totalParts * 0.8) return;
+        var elsewhere = {};
+        d.assembly.forEach(function (o) { if (o !== s) o.parts.forEach(function (pid) { elsewhere[pid] = true; }); });
+        var before = s.parts.length;
+        s.parts = s.parts.filter(function (pid) { return !elsewhere[pid]; });
+        if (s.parts.length < before) warnings.push('Assembly step "' + s.title + '" listed nearly all parts; kept only the parts not added in other steps.');
+      });
+    }
+    // 2. Deduplicate across steps (first occurrence wins — handles cumulative lists).
+    var covered = {}, dedup = 0;
+    d.assembly.forEach(function (s) {
+      s.parts = s.parts.filter(function (pid) {
+        if (covered[pid]) { dedup++; return false; }
+        covered[pid] = true;
+        return true;
+      });
+    });
+    if (dedup) warnings.push(dedup + ' part reference(s) repeated across assembly steps were removed (each part is added once).');
+
     var orphans = d.parts.filter(function (p) { return !covered[p.id]; }).map(function (p) { return p.id; });
     if (orphans.length) {
       warnings.push('Parts missing from assembly steps (auto step added): ' + orphans.join(', '));
@@ -471,7 +496,7 @@
   /* Geometry lints for the automatic repair loop. Returns human-readable issue
    * strings (max 12). Rotated parts are exempt (loose bounds → false positives). */
   function lintDesign(d) {
-    var issues = [];
+    var issues = [], overlapIssues = [];
     var parts = d.parts || [];
     var byId = {};
     parts.forEach(function (p) { byId[p.id] = p; });
@@ -533,18 +558,124 @@
         var a = parts[i], b = parts[k];
         if (isRotated(a) || isRotated(b)) continue;
         var jt = joined[a.id + '|' + b.id];
-        var allow = jt ? (HOUSED[jt] ? 30 : 12) : 3;
+        if (jt && HOUSED[jt]) continue;      // housed joints (incl. through-tenons) interpenetrate by design
+        var allow = jt ? 45 : 6;             // joined parts model their joinery as overlap — give them slack
         var ba = partBounds(a), bb = partBounds(b);
-        var pen = 1e9, over = true;
+        var pen = 1e9, over = true, ovol = 1;
         ['x', 'y', 'z'].forEach(function (ax) {
           var o = Math.min(ba.max[ax], bb.max[ax]) - Math.max(ba.min[ax], bb.min[ax]);
-          if (o <= 0) over = false; else pen = Math.min(pen, o);
+          if (o <= 0) over = false; else { pen = Math.min(pen, o); ovol *= o; }
         });
-        if (over && pen > allow) issues.push('Parts "' + a.id + '" and "' + b.id + '" overlap by ~' + Math.round(pen) + ' mm.');
+        if (!over) continue;
+        if (pen > allow) {
+          overlapIssues.push('Parts "' + a.id + '" and "' + b.id + '" overlap by ~' + Math.round(pen) + ' mm.' +
+            (jt ? ' Separate them, or model a housed joint (dado/rabbet/lap) with a matching cutout prep operation.'
+                : ' If this is intended joinery, add a joint entry between them instead of moving parts.'));
+        } else if (jt && ovol > 0.75 * Math.min(partVolume(a), partVolume(b))) {
+          var inner = partVolume(a) < partVolume(b) ? a : b;
+          var outer = inner === a ? b : a;
+          issues.push('Part "' + inner.id + '" is almost entirely buried inside "' + outer.id + '" — it is redundant or misplaced.');
+        }
       }
     }
 
-    return issues.slice(0, 12);
+    // 4. fastener joints but no hardware to buy
+    var FASTENED = { screw: 1, bolt: 1, nail: 1, bracket: 1, hinge: 1, dowel: 1, biscuit: 1, domino: 1, pocket_hole: 1 };
+    if ((!d.hardware || !d.hardware.length) && (d.joints || []).some(function (j) { return FASTENED[j.type]; })) {
+      issues.push('The hardware list is empty although the design uses fasteners — add every screw/bolt/fitting with quantity and size.');
+    }
+
+    // 5. assembly step sanity (fixable via set_assembly)
+    var steps = d.assembly || [];
+    var np = parts.length;
+    if (np >= 6 && steps.length && steps.length < 3) {
+      issues.push('Only ' + steps.length + ' assembly step(s) for ' + np + ' parts — replace the assembly (set_assembly) with 5-10 ordered steps, each adding a small connected group of parts.');
+    }
+    steps.forEach(function (s) {
+      if (np >= 6 && s.parts && s.parts.length > np * 0.6) {
+        issues.push('Assembly step ' + s.step + ' ("' + s.title + '") adds ' + s.parts.length + ' of ' + np + ' parts at once — split it into logical stages (set_assembly).');
+      }
+    });
+    // Buildability: every part added after step 1 must rest on the floor or
+    // touch something already assembled.
+    if (steps.length > 1) {
+      var placed = {}, buildIssues = 0;
+      (steps[0].parts || []).forEach(function (pid) { placed[pid] = true; });
+      for (var si = 1; si < steps.length; si++) {
+        (steps[si].parts || []).forEach(function (pid) {
+          var p = byId[pid];
+          if (p && !isRotated(p)) {
+            var connected = partBounds(p).min.y <= 2;
+            if (!connected) (adj[pid] || []).forEach(function (nid) { if (placed[nid]) connected = true; });
+            if (!connected && buildIssues < 3) {
+              issues.push('Assembly step ' + steps[si].step + ' adds "' + pid + '" but it touches nothing assembled in earlier steps — reorder the steps or fix its position.');
+              buildIssues++;
+            }
+          }
+          placed[pid] = true;
+        });
+      }
+    }
+
+    // Overlaps last: structural problems (floating/buried/hardware) matter more
+    // and must survive the cap.
+    return issues.concat(overlapIssues).slice(0, 12);
+  }
+
+  /* Deterministic fix for joints whose parts do not touch: keep the first part
+   * and reattach the joint to the touching part nearest the joint position
+   * (also tries the reverse). Hinges are never retargeted. Mutates design.
+   * Returns { fixed: [{id, to}], remaining: [jointId...] }. */
+  function retargetJoints(d, notouchIds) {
+    var byId = {};
+    (d.parts || []).forEach(function (p) { byId[p.id] = p; });
+
+    function contactCenter(a, c, ref) {
+      // Overlap region (25 mm margin) between a and c; null if they don't touch.
+      var ba = partBounds(a), bc = partBounds(c), center = {}, ok = true;
+      ['x', 'y', 'z'].forEach(function (ax) {
+        var lo = Math.max(ba.min[ax], bc.min[ax]) - 25;
+        var hi = Math.min(ba.max[ax], bc.max[ax]) + 25;
+        if (lo > hi) ok = false; else center[ax] = (lo + hi) / 2;
+      });
+      if (!ok) return null;
+      var dx = center.x - ref.x, dy = center.y - ref.y, dz = center.z - ref.z;
+      return { center: center, dist: dx * dx + dy * dy + dz * dz };
+    }
+
+    function bestPartner(keep, excludeId, ref) {
+      var best = null;
+      (d.parts || []).forEach(function (c) {
+        if (c.id === keep.id || c.id === excludeId) return;
+        if (isRotated(c)) return; // loose bounds of rotated parts phantom-touch everything
+        var cc = contactCenter(keep, c, ref);
+        if (cc && (!best || cc.dist < best.dist)) best = { id: c.id, center: cc.center, dist: cc.dist };
+      });
+      return best;
+    }
+
+    var fixed = [], remaining = [];
+    (notouchIds || []).forEach(function (jid) {
+      var j = (d.joints || []).find(function (x) { return x.id === jid; });
+      if (!j || j.type === 'hinge' || !j.parts || j.parts.length !== 2) { remaining.push(jid); return; }
+      var a = byId[j.parts[0]], b = byId[j.parts[1]];
+      if (!a || !b) { remaining.push(jid); return; }
+      var ref = j.position || a.position;
+      var cand = bestPartner(a, b.id, ref);
+      if (cand) {
+        j.parts = [a.id, cand.id];
+      } else {
+        cand = bestPartner(b, a.id, ref);
+        if (cand) j.parts = [b.id, cand.id];
+      }
+      if (cand) {
+        j.position = cand.center;
+        fixed.push({ id: jid, to: cand.id });
+      } else {
+        remaining.push(jid);
+      }
+    });
+    return { fixed: fixed, remaining: remaining };
   }
 
   /* ---------- patch application (diff-based AI edits) ----------
@@ -675,6 +806,7 @@
     applyPatch: applyPatch,
     snapDesign: snapDesign,
     lintDesign: lintDesign,
+    retargetJoints: retargetJoints,
     cutList: cutList,
     dimsLabel: dimsLabel,
     auditJoints: auditJoints,

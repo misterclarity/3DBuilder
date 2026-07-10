@@ -306,6 +306,9 @@
     if (snap.floored || snap.gapsClosed) dbg('info', 'snap: ' + snap.floored + ' part(s) snapped to floor, ' + snap.gapsClosed + ' joint gap(s) closed');
     // Joint sanity: snap misplaced markers, warn about impossible joints.
     var audit = Schema.auditJoints(v.design);
+    // Deterministic retarget: reattach no-touch joints to the nearest touching part.
+    var retgt = audit.notouch.length ? Schema.retargetJoints(v.design, audit.notouch) : { fixed: [], remaining: [] };
+    if (retgt.fixed.length) dbg('info', 'retargeted joints: ' + retgt.fixed.map(function (f) { return f.id + '→' + f.to; }).join(', '));
     var diffMsg = (currentDesign && env.scope !== 'new') ? diffDesigns(currentDesign, v.design) : null;
     var isNewProject = env.scope === 'new' && currentDesign && v.design.meta.name !== currentDesign.meta.name;
     if (isNewProject && dirty) {
@@ -325,20 +328,21 @@
     if (diffMsg) addMsg('sys', diffMsg);
     var warnBits = [];
     if (audit.moved) warnBits.push(t('audit.moved', { n: audit.moved }));
-    audit.notouch.forEach(function (id) { warnBits.push(t('audit.notouch', { id: id })); });
+    retgt.fixed.forEach(function (f) { warnBits.push(t('audit.retargeted', { id: f.id, to: f.to })); });
+    retgt.remaining.forEach(function (id) { warnBits.push(t('audit.notouch', { id: id })); });
     (extraNotes || []).forEach(function (n) { warnBits.push(n); });
     if (v.warnings.length) warnBits.push(v.warnings.slice(0, 2).join(' · '));
     if (warnBits.length) {
       var wm = addMsg('sys', '⚠ ' + warnBits.join('\n⚠ '));
-      wm.title = v.warnings.concat(audit.notouch).concat(extraNotes || []).join('\n');
+      wm.title = v.warnings.concat(retgt.remaining).concat(extraNotes || []).join('\n');
     }
     // Keep history light: don't repeat the whole design (it is re-injected each turn).
     chatHistory.push({ role: 'assistant', content: JSON.stringify({ type: env.type, scope: env.scope || 'new', summary: summary }) });
 
     // Automatic repair loop: feed geometry lint findings back to the AI (max 2 rounds).
     var issues = Schema.lintDesign(v.design);
-    audit.notouch.forEach(function (id) {
-      issues.push('Joint "' + id + '" connects parts that do not touch — move the parts into contact or fix/remove the joint.');
+    retgt.remaining.forEach(function (id) {
+      issues.push('Joint "' + id + '" connects parts that do not touch — reattach it to the parts it actually sits between (update_joint) or remove it (remove_joint).');
     });
     if (issues.length && depth < 2 && LLM.settings().autoRepair !== false) {
       dbg('info', 'lint: ' + issues.length + ' issue(s), starting repair round ' + (depth + 1));
@@ -368,6 +372,10 @@
         env.scope = 'modify';
         env.summary = env.summary || t('msg.repaired');
         applyDesignEnvelope(env, Schema.validate(env.design), [], depth);
+      } else if (env && (env.type === 'chat' || env.type === 'clarify') && env.message) {
+        // The model answered in prose instead of fixing — show it so the user can react.
+        addMsg('ai', env.message);
+        addMsg('sys', t('msg.repairFail'));
       } else {
         addMsg('sys', t('msg.repairFail'));
       }

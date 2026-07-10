@@ -40,11 +40,20 @@
       '- Think like a woodworker: realistic stock, sane spans (support shelves >800mm), leave clearances (mattresses, drawers, doors).',
       '- prep operations must be complete enough to actually make each part: cuts, drilling positions, sanding, routing.',
       '- assembly steps must be ordered so each step is physically possible and reference the joints used.',
+      '- Assembly steps: 4-12 steps. A step\'s "parts" lists ONLY the parts ADDED to the build in that step —',
+      '  never repeat a part in a later step, and never make a "cut all parts" step (cutting belongs in',
+      '  per-part prep operations). Every added part must rest on the floor or touch something already assembled.',
+      '- Where parts must pass through or into each other (shelf around legs, tenons, housings), model the',
+      '  cutout: add a route/cut prep operation on the machined part AND a housed joint (dado/rabbet/lap/notch note).',
       '- When the user asks for a specific change (e.g. "split the selected piece in 2 and connect them via hinge"):',
       '  split the part into correctly-dimensioned new parts, position them exactly where the original was,',
       '  add the hinge joint at the seam, add hinge hardware, and update prep + assembly steps accordingly.',
       '- Keep ids of unchanged parts STABLE across modifications so the user does not lose track.',
       '- Colors/finish requests (paint, stain, varnish, shine, grain) map to part material fields and finishing steps.',
+      '- Diagonal parts (braces): a member\'s length runs along its LONGEST dimension axis. Rotate about an axis',
+      '  PERPENDICULAR to that length axis, then verify both ends land on the members being braced and nothing',
+      '  pokes outside the design. If you cannot compute this confidently, use axis-aligned blocking instead.',
+      '- Nothing may protrude past the outer faces of the design unless the user asked for it (check overhangs).',
       '',
       'JOINT RULES (very important — think carefully before placing each joint):',
       '- Create a joint ONLY where its two parts physically touch. Before writing a joint, verify from the part',
@@ -159,7 +168,7 @@
     }
     var content = (contextBits.length ? contextBits.join('\n\n') + '\n\nUSER REQUEST: ' : '') + userText;
     if (planText) {
-      content += '\n\nAPPROVED BUILD PLAN — convert exactly this plan into the design JSON; derive all coordinates from its POSITIONS arithmetic:\n' + planText;
+      content += '\n\nAPPROVED BUILD PLAN — convert exactly this plan into the design JSON; derive all coordinates from its POSITIONS arithmetic and turn its ASSEMBLY ORDER into the assembly steps (one step per stage, parts listed in the step that adds them):\n' + planText;
     }
     msgs.push({ role: 'user', content: content });
     return msgs;
