@@ -86,8 +86,62 @@
     return p.join('\n');
   }
 
-  /* Build message list for a generation/modification turn. */
-  function buildMessages(history, currentDesign, selectedIds, userText) {
+  /* Stage-1 prompt of two-pass generation: think in text, no geometry JSON yet. */
+  function planSystemPrompt(lang) {
+    var p = [
+      'You are an expert carpenter and furniture designer helping plan a DIY (mainly wood) project.',
+      'In THIS step you produce a concise BUILD PLAN — NOT the final design data.',
+      'Reply in exactly ONE of these three ways:',
+      '1. If the request is ambiguous or missing data that materially changes the design:',
+      '   {"type":"clarify","message":"short intro","questions":["q1?","q2?"]}   (JSON only, max 4 questions)',
+      '2. If it is conversation or advice that needs no design: {"type":"chat","message":"your answer"}   (JSON only)',
+      '3. Otherwise: a plain-text plan (NO JSON, no code fences) with exactly these sections:',
+      '   NAME: short project name',
+      '   OVERALL: outer dimensions W x D x H in mm, key clearances and assumptions',
+      '   MEMBERS: numbered list of ALL parts — count, cross-section, length, stock (e.g. "4x leg 70x70mm post, 720mm")',
+      '   POSITIONS: the coordinate logic with arithmetic shown (e.g. "slat gap = (2000 - 2*28 - 12*70) / 13 = 82.5mm")',
+      '   JOINERY: which joint type connects what, and why',
+      '   ASSEMBLY ORDER: 4-8 short ordered steps',
+      'Rules: metric mm; realistic commercially available stock sizes; gravity-sound structure;',
+      'unsupported spans under 800 mm; assume sensible defaults for minor details and STATE them instead of asking.'
+    ];
+    if (lang === 'de') {
+      p.push('');
+      p.push('LANGUAGE: The user speaks German. Write the plan and any "message"/"questions" in natural German.');
+      p.push('Keep the JSON keys and "type" values in English.');
+    }
+    return p.join('\n');
+  }
+
+  function buildPlanMessages(history, currentDesign, selectedIds, userText) {
+    var lang = window.I18n ? window.I18n.getLang() : 'en';
+    var msgs = [{ role: 'system', content: planSystemPrompt(lang) }];
+    history.forEach(function (m) { msgs.push(m); });
+    var bits = [];
+    if (currentDesign) bits.push('CURRENT DESIGN JSON (for reference):\n' + JSON.stringify(compactDesign(currentDesign)));
+    if (selectedIds && selectedIds.length) bits.push('USER HAS SELECTED THESE PARTS: ' + selectedIds.join(', '));
+    var content = (bits.length ? bits.join('\n\n') + '\n\nUSER REQUEST: ' : '') + userText;
+    msgs.push({ role: 'user', content: content });
+    return msgs;
+  }
+
+  /* Repair turn: automated lint findings fed back for a minimal fix. */
+  function buildRepairMessages(design, issues) {
+    var lang = window.I18n ? window.I18n.getLang() : 'en';
+    return [
+      { role: 'system', content: systemPrompt(lang) },
+      { role: 'user', content:
+        'CURRENT DESIGN JSON:\n' + JSON.stringify(compactDesign(design)) +
+        '\n\nAn automated geometry check found these problems:\n- ' + issues.join('\n- ') +
+        '\n\nFix ONLY these problems by adjusting positions/dimensions/joints minimally.' +
+        ' Keep everything else exactly as it is (ids, names, materials, steps).' +
+        ' Reply with a "patch" (preferred) or a full "design" with scope "modify".' }
+    ];
+  }
+
+  /* Build message list for a generation/modification turn.
+   * planText (optional): stage-1 build plan the model must follow. */
+  function buildMessages(history, currentDesign, selectedIds, userText, planText) {
     var lang = window.I18n ? window.I18n.getLang() : 'en';
     var msgs = [{ role: 'system', content: systemPrompt(lang) }];
     history.forEach(function (m) { msgs.push(m); });
@@ -104,6 +158,9 @@
       contextBits.push('USER HAS SELECTED THESE PARTS IN THE 3D VIEW (“the selected piece” refers to them): ' + names.join(', '));
     }
     var content = (contextBits.length ? contextBits.join('\n\n') + '\n\nUSER REQUEST: ' : '') + userText;
+    if (planText) {
+      content += '\n\nAPPROVED BUILD PLAN — convert exactly this plan into the design JSON; derive all coordinates from its POSITIONS arithmetic:\n' + planText;
+    }
     msgs.push({ role: 'user', content: content });
     return msgs;
   }
@@ -123,6 +180,8 @@
 
   window.Prompts = {
     systemPrompt: systemPrompt,
-    buildMessages: buildMessages
+    buildMessages: buildMessages,
+    buildPlanMessages: buildPlanMessages,
+    buildRepairMessages: buildRepairMessages
   };
 })();

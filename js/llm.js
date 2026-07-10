@@ -9,7 +9,9 @@
     maxTokens: 16384,
     aframeVersion: '1.8.0',
     language: 'en',
-    strictJson: 'auto' // 'auto' | 'on' | 'off' — send response_format json_schema (grammar-constrained output)
+    strictJson: 'auto', // 'auto' | 'on' | 'off' — send response_format json_schema (grammar-constrained output)
+    twoPass: true,      // plan first, then generate geometry (new designs)
+    autoRepair: true    // feed geometry lint findings back to the AI automatically
   };
 
   function settings() {
@@ -146,17 +148,23 @@
     return testConnection().then(function (r) { return r.models; });
   }
 
-  /* Extract the JSON envelope from a model response.
-   * Handles: <think>...</think> blocks (qwen3), markdown fences, leading prose. */
-  function extractJSON(text) {
-    if (!text) return null;
+  /* Remove <think>...</think> reasoning blocks (qwen3 etc.), including unclosed
+   * ones: take everything after the last </think>, drop a never-closed <think>. */
+  function stripThink(text) {
+    if (!text) return '';
     var t = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
-    // If an unclosed think block remains, take everything after the last </think>,
-    // and drop anything inside a never-closed <think> (truncated reasoning, no JSON there).
     var lastClose = t.lastIndexOf('</think>');
     if (lastClose >= 0) t = t.slice(lastClose + 8);
     var openThink = t.indexOf('<think>');
     if (openThink >= 0) t = t.slice(0, openThink);
+    return t.trim();
+  }
+
+  /* Extract the JSON envelope from a model response.
+   * Handles: <think>...</think> blocks (qwen3), markdown fences, leading prose. */
+  function extractJSON(text) {
+    var t = stripThink(text);
+    if (!t) return null;
     var fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (fence) t = fence[1];
     var start = t.indexOf('{');
@@ -214,6 +222,7 @@
     resolveModel: resolveModel,
     listModels: listModels,
     testConnection: testConnection,
-    extractJSON: extractJSON
+    extractJSON: extractJSON,
+    stripThink: stripThink
   };
 })();

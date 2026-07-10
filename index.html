@@ -134,6 +134,8 @@
       </select>
     </label>
     <small data-i18n="set.strictNote">Guarantees valid JSON via a server-side grammar (llama.cpp). May suppress the model's thinking phase — turn Off if design quality drops.</small>
+    <label class="chkline"><input type="checkbox" id="setTwoPass"> <span data-i18n="set.twopass">Two-stage design: plan first (better quality, slower)</span></label>
+    <label class="chkline"><input type="checkbox" id="setRepair"> <span data-i18n="set.repair">Auto-fix geometry problems (extra AI rounds)</span></label>
     <div class="row2">
       <label><span data-i18n="set.aframe">A-Frame version</span>
         <input id="setAframe" type="text" placeholder="1.8.0">

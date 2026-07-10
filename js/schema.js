@@ -399,6 +399,154 @@
     return { notouch: notouch, moved: moved };
   }
 
+  /* ---------- geometry cleanup & lints ---------- */
+  function isRotated(p) { return !!(p.rotation && (p.rotation.x || p.rotation.y || p.rotation.z)); }
+
+  function partBounds(p) {
+    var half;
+    if (p.shape === 'cylinder') half = { x: p.dimensions.radius, y: p.dimensions.height / 2, z: p.dimensions.radius };
+    else half = { x: p.dimensions.x / 2, y: p.dimensions.y / 2, z: p.dimensions.z / 2 };
+    if (isRotated(p)) {
+      var r = Math.sqrt(half.x * half.x + half.y * half.y + half.z * half.z);
+      half = { x: r, y: r, z: r };
+    }
+    var c = p.position;
+    return {
+      min: { x: c.x - half.x, y: c.y - half.y, z: c.z - half.z },
+      max: { x: c.x + half.x, y: c.y + half.y, z: c.z + half.z }
+    };
+  }
+
+  function partVolume(p) {
+    return p.shape === 'cylinder'
+      ? Math.PI * p.dimensions.radius * p.dimensions.radius * p.dimensions.height
+      : p.dimensions.x * p.dimensions.y * p.dimensions.z;
+  }
+
+  /* Deterministic cleanup of sloppy AI coordinates. Mutates the design.
+   * - rounds positions/dimensions to 0.5 mm
+   * - snaps parts that almost rest on the floor (|bottom| < 8 mm) onto y=0
+   * - closes small gaps (<= 6 mm) between joined parts by moving the smaller part
+   * Returns { floored, gapsClosed }. */
+  function snapDesign(d) {
+    var res = { floored: 0, gapsClosed: 0 };
+    function r05(v) { return Math.round(v * 2) / 2; }
+    (d.parts || []).forEach(function (p) {
+      ['x', 'y', 'z'].forEach(function (ax) { p.position[ax] = r05(p.position[ax]); });
+      if (p.shape === 'cylinder') { p.dimensions.radius = r05(p.dimensions.radius); p.dimensions.height = r05(p.dimensions.height); }
+      else ['x', 'y', 'z'].forEach(function (ax) { p.dimensions[ax] = r05(p.dimensions[ax]); });
+      if (!isRotated(p)) {
+        var bottom = partBounds(p).min.y;
+        if (Math.abs(bottom) > 0.01 && bottom > -8 && bottom < 8) { p.position.y -= bottom; res.floored++; }
+      }
+    });
+    var byId = {};
+    (d.parts || []).forEach(function (p) { byId[p.id] = p; });
+    (d.joints || []).forEach(function (j) {
+      if (!j.parts || j.parts.length < 2) return;
+      var a = byId[j.parts[0]], b = byId[j.parts[1]];
+      if (!a || !b || isRotated(a) || isRotated(b)) return;
+      var ba = partBounds(a), bb = partBounds(b);
+      var sepAxis = null, sep = 0, n = 0;
+      ['x', 'y', 'z'].forEach(function (ax) {
+        var g = Math.max(ba.min[ax] - bb.max[ax], bb.min[ax] - ba.max[ax]);
+        if (g > 0.01) { n++; sepAxis = ax; sep = g; }
+      });
+      if (n === 1 && sep <= 6) {
+        // Never move a part that stands on the floor — prefer the other one,
+        // otherwise move the smaller part.
+        function onFloor(p) { return Math.abs(partBounds(p).min.y) < 0.6; }
+        var mover;
+        if (onFloor(a) && !onFloor(b)) mover = b;
+        else if (onFloor(b) && !onFloor(a)) mover = a;
+        else mover = partVolume(a) <= partVolume(b) ? a : b;
+        var other = mover === a ? b : a;
+        mover.position[sepAxis] += (other.position[sepAxis] > mover.position[sepAxis] ? 1 : -1) * sep;
+        res.gapsClosed++;
+      }
+    });
+    return res;
+  }
+
+  /* Geometry lints for the automatic repair loop. Returns human-readable issue
+   * strings (max 12). Rotated parts are exempt (loose bounds → false positives). */
+  function lintDesign(d) {
+    var issues = [];
+    var parts = d.parts || [];
+    var byId = {};
+    parts.forEach(function (p) { byId[p.id] = p; });
+
+    // 1. below floor
+    parts.forEach(function (p) {
+      if (isRotated(p)) return;
+      var b = partBounds(p);
+      if (b.min.y < -1) issues.push('Part "' + p.id + '" extends ' + Math.round(-b.min.y) + ' mm below the floor (y=0).');
+    });
+
+    // touching graph (3 mm tolerance)
+    function touching(a, b) {
+      var ba = partBounds(a), bb = partBounds(b), ok = true;
+      ['x', 'y', 'z'].forEach(function (ax) {
+        if (ba.min[ax] - 3 > bb.max[ax] || bb.min[ax] - 3 > ba.max[ax]) ok = false;
+      });
+      return ok;
+    }
+    var adj = {};
+    var i, k;
+    for (i = 0; i < parts.length; i++) {
+      for (k = i + 1; k < parts.length; k++) {
+        if (touching(parts[i], parts[k])) {
+          (adj[parts[i].id] = adj[parts[i].id] || []).push(parts[k].id);
+          (adj[parts[k].id] = adj[parts[k].id] || []).push(parts[i].id);
+        }
+      }
+    }
+
+    // 2. support: BFS from grounded parts (bottom within 2 mm of the floor)
+    var grounded = {}, queue = [];
+    parts.forEach(function (p) {
+      if (isRotated(p) || partBounds(p).min.y <= 2) { grounded[p.id] = true; queue.push(p.id); }
+    });
+    while (queue.length) {
+      var cur = queue.pop();
+      (adj[cur] || []).forEach(function (nid) {
+        if (!grounded[nid]) { grounded[nid] = true; queue.push(nid); }
+      });
+    }
+    parts.forEach(function (p) {
+      if (grounded[p.id]) return;
+      var reason = (adj[p.id] && adj[p.id].length) ? 'it only touches other unsupported parts' : 'it touches no other part';
+      issues.push('Part "' + p.id + '" floats in mid-air (' + reason + '; bottom at y=' + Math.round(partBounds(p).min.y) + ' mm).');
+    });
+
+    // 3. deep overlaps (joined pairs get slack: housed joints legitimately interpenetrate)
+    var joined = {};
+    (d.joints || []).forEach(function (j) {
+      if (j.parts && j.parts.length >= 2) {
+        joined[j.parts[0] + '|' + j.parts[1]] = j.type;
+        joined[j.parts[1] + '|' + j.parts[0]] = j.type;
+      }
+    });
+    var HOUSED = { dado: 1, groove: 1, rabbet: 1, lap: 1, mortise_tenon: 1, dovetail: 1, miter: 1 };
+    for (i = 0; i < parts.length; i++) {
+      for (k = i + 1; k < parts.length; k++) {
+        var a = parts[i], b = parts[k];
+        if (isRotated(a) || isRotated(b)) continue;
+        var jt = joined[a.id + '|' + b.id];
+        var allow = jt ? (HOUSED[jt] ? 30 : 12) : 3;
+        var ba = partBounds(a), bb = partBounds(b);
+        var pen = 1e9, over = true;
+        ['x', 'y', 'z'].forEach(function (ax) {
+          var o = Math.min(ba.max[ax], bb.max[ax]) - Math.max(ba.min[ax], bb.min[ax]);
+          if (o <= 0) over = false; else pen = Math.min(pen, o);
+        });
+        if (over && pen > allow) issues.push('Parts "' + a.id + '" and "' + b.id + '" overlap by ~' + Math.round(pen) + ' mm.');
+      }
+    }
+
+    return issues.slice(0, 12);
+  }
+
   /* ---------- patch application (diff-based AI edits) ----------
    * Applies part-level ops to a deep copy of the design. The result must still
    * be run through validate(). Returns { design, notes[] }. */
@@ -525,6 +673,8 @@
     ENVELOPE: ENVELOPE_SCHEMA,
     validate: validate,
     applyPatch: applyPatch,
+    snapDesign: snapDesign,
+    lintDesign: lintDesign,
     cutList: cutList,
     dimsLabel: dimsLabel,
     auditJoints: auditJoints,

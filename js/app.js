@@ -138,6 +138,22 @@
     return div;
   }
 
+  function clearChatLog() { $('chatLog').innerHTML = ''; }
+
+  // Rebuild the visible chat log from a restored chatHistory (library load / import).
+  function renderChatHistory() {
+    clearChatLog();
+    chatHistory.forEach(function (m) {
+      if (m.role === 'user') { addMsg('user', m.content); return; }
+      try {
+        var env = JSON.parse(m.content);
+        if (env.type === 'chat') addMsg('ai', env.message || '');
+        else if (env.type === 'clarify') addClarify(env.message, env.questions);
+        else if (env.summary) addMsg('ai', env.summary);
+      } catch (e) { /* non-JSON assistant entry — skip */ }
+    });
+  }
+
   function addClarify(message, questions) {
     var div = addMsg('ai', message || t('chat.clarifyIntro'));
     (questions || []).forEach(function (q) {
@@ -162,29 +178,73 @@
 
     var thinking = addMsg('ai', '');
     thinking.classList.add('thinking');
-    thinking.textContent = t('chat.designing');
     $('btnSend').classList.add('hidden');
     $('btnStop').classList.remove('hidden');
 
-    var msgs = Prompts.buildMessages(chatHistory.slice(0, -1).slice(-10), currentDesign, selectedIds, text);
+    var hist = chatHistory.slice(0, -1).slice(-10);
+    // Two-pass for designs from scratch: plan in text first, then generate geometry.
+    if (LLM.settings().twoPass !== false && !currentDesign) planStage(hist, text, thinking);
+    else buildStage(hist, text, null, thinking);
+  }
+
+  // Stage 1: free-text build plan (or direct clarify/chat JSON — handled as usual).
+  function planStage(hist, text, thinking) {
+    thinking.textContent = t('chat.planning');
+    activeReq = LLM.chat(Prompts.buildPlanMessages(hist, currentDesign, selectedIds, text), function (_d, full) {
+      thinking.textContent = t('chat.planning') + ' (' + full.length + ')';
+    });
+    activeReq.promise.then(function (full) {
+      var env = LLM.extractJSON(full);
+      if (env && (env.type === 'clarify' || env.type === 'chat')) {
+        finishReq();
+        thinking.remove();
+        handleResponse(full);
+        return;
+      }
+      var plan = LLM.stripThink(full);
+      if (!plan) { finishReq(); thinking.remove(); addMsg('err', t('err.parse')); return; }
+      addPlanMsg(plan);
+      dbg('info', 'Plan stage done (' + plan.length + ' chars), starting build stage');
+      buildStage(hist, text, plan, thinking);
+    }).catch(function (err) { reqFailed(err, thinking); });
+  }
+
+  // Stage 2 (or single pass): produce/modify the design JSON.
+  function buildStage(hist, text, plan, thinking) {
+    thinking.textContent = t('chat.designing');
+    var msgs = Prompts.buildMessages(hist, currentDesign, selectedIds, text, plan);
     activeReq = LLM.chat(msgs, function (_d, full) {
       thinking.textContent = t('chat.designing') + ' (' + full.length + ')';
     }, { responseSchema: Schema.ENVELOPE });
-
     activeReq.promise.then(function (full) {
       finishReq();
       thinking.remove();
       handleResponse(full);
-    }).catch(function (err) {
-      finishReq();
-      thinking.remove();
-      if (err && err.name === 'AbortError') { addMsg('sys', t('msg.stopped')); return; }
-      dbg('error', 'LLM request failed: ' + err.message);
-      var m = addMsg('err', t('err.noai', { e: err.message }));
-      var hint = document.createElement('details');
-      hint.innerHTML = t('err.troubleshoot');
-      m.appendChild(hint);
-    });
+    }).catch(function (err) { reqFailed(err, thinking); });
+  }
+
+  function reqFailed(err, thinking) {
+    finishReq();
+    if (thinking) thinking.remove();
+    if (err && err.name === 'AbortError') { addMsg('sys', t('msg.stopped')); return; }
+    dbg('error', 'LLM request failed: ' + err.message);
+    var m = addMsg('err', t('err.noai', { e: err.message }));
+    var hint = document.createElement('details');
+    hint.innerHTML = t('err.troubleshoot');
+    m.appendChild(hint);
+  }
+
+  // Collapsible build-plan message.
+  function addPlanMsg(plan) {
+    var div = addMsg('ai', '');
+    var det = document.createElement('details');
+    var sum = document.createElement('summary');
+    sum.textContent = '📋 ' + t('chat.planTitle');
+    var pre = document.createElement('pre');
+    pre.textContent = plan;
+    det.appendChild(sum);
+    det.appendChild(pre);
+    div.appendChild(det);
   }
 
   function finishReq() {
@@ -216,7 +276,7 @@
       return;
     }
     if (env.type === 'design') {
-      applyDesignEnvelope(env, Schema.validate(env.design), []);
+      applyDesignEnvelope(env, Schema.validate(env.design), [], 0);
       return;
     }
     if (env.type === 'patch') {
@@ -227,19 +287,23 @@
       }
       var pr = Schema.applyPatch(currentDesign, env.ops || []);
       env.scope = 'modify';
-      applyDesignEnvelope(env, Schema.validate(pr.design), pr.notes);
+      applyDesignEnvelope(env, Schema.validate(pr.design), pr.notes, 0);
       return;
     }
     addMsg('err', t('err.unknownType', { t: env.type }));
   }
 
-  // Shared handling for full-design and patch responses.
-  function applyDesignEnvelope(env, v, extraNotes) {
+  // Shared handling for full-design and patch responses. depth = repair round.
+  function applyDesignEnvelope(env, v, extraNotes, depth) {
+    depth = depth || 0;
     if (!v.ok) {
       addMsg('err', t('err.invalid', { e: v.errors.join('; ') }));
       chatHistory.push({ role: 'assistant', content: 'Produced invalid design: ' + v.errors.join('; ') });
       return;
     }
+    // Deterministic geometry cleanup: round to 0.5mm, snap to floor, close small joint gaps.
+    var snap = Schema.snapDesign(v.design);
+    if (snap.floored || snap.gapsClosed) dbg('info', 'snap: ' + snap.floored + ' part(s) snapped to floor, ' + snap.gapsClosed + ' joint gap(s) closed');
     // Joint sanity: snap misplaced markers, warn about impossible joints.
     var audit = Schema.auditJoints(v.design);
     var diffMsg = (currentDesign && env.scope !== 'new') ? diffDesigns(currentDesign, v.design) : null;
@@ -256,7 +320,7 @@
     setDesign(v.design, (env.type === 'patch' && currentName) ? currentName : v.design.meta.name);
     markDirty();
     pushHistory();
-    var summary = env.summary || v.design.meta.name;
+    var summary = (depth ? '🔧 ' : '') + (env.summary || v.design.meta.name);
     addMsg('ai', summary + '\n' + t('msg.designStats', { p: v.design.parts.length, s: v.design.assembly.length }));
     if (diffMsg) addMsg('sys', diffMsg);
     var warnBits = [];
@@ -270,6 +334,48 @@
     }
     // Keep history light: don't repeat the whole design (it is re-injected each turn).
     chatHistory.push({ role: 'assistant', content: JSON.stringify({ type: env.type, scope: env.scope || 'new', summary: summary }) });
+
+    // Automatic repair loop: feed geometry lint findings back to the AI (max 2 rounds).
+    var issues = Schema.lintDesign(v.design);
+    audit.notouch.forEach(function (id) {
+      issues.push('Joint "' + id + '" connects parts that do not touch — move the parts into contact or fix/remove the joint.');
+    });
+    if (issues.length && depth < 2 && LLM.settings().autoRepair !== false) {
+      dbg('info', 'lint: ' + issues.length + ' issue(s), starting repair round ' + (depth + 1));
+      runRepair(issues, depth + 1);
+    } else if (issues.length) {
+      var im = addMsg('sys', '⚠ ' + issues.slice(0, 4).join('\n⚠ ') + (issues.length > 4 ? '\n…' : ''));
+      im.title = issues.join('\n');
+    }
+  }
+
+  // Silent AI round that fixes lint findings with a minimal patch.
+  function runRepair(issues, depth) {
+    var note = addMsg('sys', t('msg.repairing', { n: issues.length }));
+    $('btnSend').classList.add('hidden');
+    $('btnStop').classList.remove('hidden');
+    activeReq = LLM.chat(Prompts.buildRepairMessages(currentDesign, issues), null, { responseSchema: Schema.ENVELOPE });
+    activeReq.promise.then(function (full) {
+      finishReq();
+      note.remove();
+      var env = LLM.extractJSON(full);
+      if (env && env.type === 'patch' && currentDesign) {
+        var pr = Schema.applyPatch(currentDesign, env.ops || []);
+        env.scope = 'modify';
+        env.summary = env.summary || t('msg.repaired');
+        applyDesignEnvelope(env, Schema.validate(pr.design), pr.notes, depth);
+      } else if (env && env.type === 'design') {
+        env.scope = 'modify';
+        env.summary = env.summary || t('msg.repaired');
+        applyDesignEnvelope(env, Schema.validate(env.design), [], depth);
+      } else {
+        addMsg('sys', t('msg.repairFail'));
+      }
+    }).catch(function (err) {
+      finishReq();
+      note.remove();
+      addMsg('sys', (err && err.name === 'AbortError') ? t('msg.stopped') : t('msg.repairFail'));
+    });
   }
 
   setInterval(function () {
@@ -561,10 +667,11 @@
     if (!confirmDiscard()) return;
     if (activeReq) activeReq.abort();   // a late AI response must not overwrite the new design
     currentRecordId = null;
-    chatHistory = [];
+    chatHistory = [];          // fresh LLM context — nothing from the old session is sent
     dirty = false;
     setDesign(null, 'New design');
     resetHistory();
+    clearChatLog();            // fresh chat window too
     addMsg('sys', t('msg.newStarted'));
   };
 
@@ -595,6 +702,7 @@
       setDesign(r.design, r.name);
       dirty = false;
       resetHistory();
+      renderChatHistory();
       addMsg('sys', t('msg.imported', { n: r.name }));
     }).catch(function (e) { addMsg('err', t('err.importFailed', { e: e.message })); });
     this.value = '';
@@ -623,6 +731,7 @@
             setDesign(rec.design, rec.name);
             dirty = false;
             resetHistory();
+            renderChatHistory();
             $('libraryModal').classList.add('hidden');
             addMsg('sys', t('msg.loaded', { n: rec.name }));
           });
@@ -665,6 +774,8 @@
     $('setTemp').value = s.temperature;
     $('setMaxTok').value = s.maxTokens;
     $('setStrict').value = s.strictJson || 'auto';
+    $('setTwoPass').checked = s.twoPass !== false;
+    $('setRepair').checked = s.autoRepair !== false;
     $('setAframe').value = s.aframeVersion;
     $('setLang').value = s.language || I18n.getLang();
     $('setTestResult').textContent = '';
@@ -680,7 +791,9 @@
       maxTokens: $('setMaxTok').value.trim() === '' ? '' : (Number($('setMaxTok').value) || 16384),
       aframeVersion: $('setAframe').value.trim() || '1.8.0',
       language: $('setLang').value,
-      strictJson: $('setStrict').value
+      strictJson: $('setStrict').value,
+      twoPass: $('setTwoPass').checked,
+      autoRepair: $('setRepair').checked
     };
   }
 
