@@ -11,7 +11,9 @@
     language: 'en',
     strictJson: 'auto', // 'auto' | 'on' | 'off' — send response_format json_schema (grammar-constrained output)
     twoPass: true,      // plan first, then generate geometry (new designs)
-    autoRepair: true    // feed geometry lint findings back to the AI automatically
+    autoRepair: true,   // feed geometry lint findings back to the AI automatically
+    visionReview: false,  // send renders to a vision model for visual critique
+    visionEndpoint: ''    // separate endpoint for the vision model ('' = main endpoint)
   };
 
   function settings() {
@@ -28,23 +30,24 @@
   }
 
   // Cache the auto-detected model per endpoint for 5 minutes.
-  var modelCache = { endpoint: '', id: '', at: 0 };
+  var modelCache = {};
 
-  /* Resolve which model to send: the configured one, or (auto) the first
-   * model the server is currently serving. Resolves to '' if unknown —
-   * llama.cpp and most single-model servers ignore the field anyway. */
-  function resolveModel() {
+  /* Resolve which model to send for an endpoint: the configured one, or (auto)
+   * the first model that endpoint is currently serving. Resolves to '' if
+   * unknown — llama.cpp and most single-model servers ignore the field anyway. */
+  function resolveModel(endpoint, modelOverride) {
     var s = settings();
-    if (s.model) return Promise.resolve(s.model);
-    if (modelCache.id && modelCache.endpoint === s.endpoint && (Date.now() - modelCache.at) < 300000) {
-      return Promise.resolve(modelCache.id);
-    }
-    return fetch(s.endpoint.replace(/\/+$/, '') + '/models')
+    var ep = endpoint || s.endpoint;
+    var m = (modelOverride !== undefined && modelOverride !== null) ? modelOverride : (endpoint ? '' : s.model);
+    if (m) return Promise.resolve(m);
+    var c = modelCache[ep];
+    if (c && c.id && (Date.now() - c.at) < 300000) return Promise.resolve(c.id);
+    return fetch(ep.replace(/\/+$/, '') + '/models')
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function (j) {
         var id = (j.data && j.data[0] && j.data[0].id) || '';
-        modelCache = { endpoint: s.endpoint, id: id, at: Date.now() };
-        if (id && window.Debug) Debug.log('info', 'llm', 'Auto-detected model: ' + id);
+        modelCache[ep] = { id: id, at: Date.now() };
+        if (id && window.Debug) Debug.log('info', 'llm', 'Auto-detected model at ' + ep + ': ' + id);
         return id;
       })
       .catch(function () { return ''; });
@@ -58,16 +61,19 @@
   var rfBlocked = {};
 
   /* Stream a chat completion.
-   * messages: [{role, content}]
+   * messages: [{role, content}] — content may be a string or an OpenAI-style
+   * array of {type:'text'|'image_url', ...} parts (vision models).
    * onDelta(textChunk, fullTextSoFar), returns Promise<fullText>.
    * opts.responseSchema: JSON Schema — sent as response_format json_schema when strictJson allows.
+   * opts.endpoint / opts.model: override the target server (e.g. vision model).
    * Returns an object {promise, abort} */
   function chat(messages, onDelta, opts) {
     opts = opts || {};
     var s = settings();
+    var ep = opts.endpoint || s.endpoint;
     var ctrl = new AbortController();
     var useRF = !!opts.responseSchema && s.strictJson !== 'off' &&
-                !(s.strictJson === 'auto' && rfBlocked[s.endpoint]);
+                !(s.strictJson === 'auto' && rfBlocked[ep]);
 
     function doFetch(model, withRF) {
       var body = { messages: messages, stream: true };
@@ -76,7 +82,7 @@
       if (s.temperature !== '' && isFinite(Number(s.temperature))) body.temperature = Number(s.temperature);
       if (s.maxTokens !== '' && isFinite(Number(s.maxTokens))) body.max_tokens = Number(s.maxTokens);
       if (withRF) body.response_format = { type: 'json_schema', json_schema: { name: 'envelope', schema: opts.responseSchema } };
-      return fetch(s.endpoint.replace(/\/+$/, '') + '/chat/completions', {
+      return fetch(ep.replace(/\/+$/, '') + '/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: ctrl.signal,
@@ -84,11 +90,11 @@
       });
     }
 
-    var promise = resolveModel().then(function (model) {
+    var promise = resolveModel(opts.endpoint, opts.model).then(function (model) {
       return doFetch(model, useRF).then(function (res) {
         if (!res.ok && useRF && s.strictJson === 'auto') {
           // Server likely doesn't support response_format — remember and retry once without.
-          rfBlocked[s.endpoint] = true;
+          rfBlocked[ep] = true;
           if (window.Debug) Debug.log('warn', 'llm', 'response_format rejected (HTTP ' + res.status + '), retrying without. Strict JSON disabled for this endpoint.');
           return doFetch(model, false);
         }
@@ -138,7 +144,7 @@
       })
       .then(function (j) {
         var models = (j.data || []).map(function (m) { return m.id; });
-        if (models.length) modelCache = { endpoint: s.endpoint, id: models[0], at: Date.now() };
+        if (models.length) modelCache[s.endpoint] = { id: models[0], at: Date.now() };
         return { ok: true, models: models };
       });
   }

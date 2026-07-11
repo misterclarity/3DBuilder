@@ -10,6 +10,8 @@
   var selectedIds = [];
   var dirty = false;         // unsaved changes to the current design
   var history = [], hIndex = -1, lastPlan = null;   // undo/redo snapshots + last cutting plan
+  var lastUserText = '';     // last design request (context for the vision critic)
+  var pendingVision = false; // run a vision review after the current turn settles
 
   var $ = function (id) { return document.getElementById(id); };
   var t = function (k, v) { return window.I18n ? I18n.t(k, v) : k; };
@@ -175,6 +177,8 @@
     $('chatInput').value = '';
     addMsg('user', text);
     chatHistory.push({ role: 'user', content: text });
+    lastUserText = text;
+    pendingVision = true;
 
     var thinking = addMsg('ai', '');
     thinking.classList.add('thinking');
@@ -347,10 +351,53 @@
     if (issues.length && depth < 2 && LLM.settings().autoRepair !== false) {
       dbg('info', 'lint: ' + issues.length + ' issue(s), starting repair round ' + (depth + 1));
       runRepair(issues, depth + 1);
-    } else if (issues.length) {
-      var im = addMsg('sys', '⚠ ' + issues.slice(0, 4).join('\n⚠ ') + (issues.length > 4 ? '\n…' : ''));
-      im.title = issues.join('\n');
+    } else {
+      if (issues.length) {
+        var im = addMsg('sys', '⚠ ' + issues.slice(0, 4).join('\n⚠ ') + (issues.length > 4 ? '\n…' : ''));
+        im.title = issues.join('\n');
+      }
+      maybeVisionReview();  // lint pipeline settled — let the vision model take a look
     }
+  }
+
+  // ---------- vision review (multimodal critique of the rendered design) ----------
+  function maybeVisionReview() {
+    if (!pendingVision) return;
+    pendingVision = false;
+    var s = LLM.settings();
+    if (!s.visionReview || !currentDesign) return;
+    // give the scene a moment to render the final design before capturing
+    setTimeout(function () { runVisionReview(s); }, 700);
+  }
+
+  function runVisionReview(s) {
+    if (activeReq || !currentDesign) return;
+    var shots = Viewer.captureViews(512);
+    if (!shots.length) { dbg('warn', 'vision: no screenshots captured'); return; }
+    var note = addMsg('sys', t('msg.visionChecking'));
+    $('btnSend').classList.add('hidden');
+    $('btnStop').classList.remove('hidden');
+    activeReq = LLM.chat(Prompts.buildVisionMessages(currentDesign, lastUserText, shots), null,
+      { endpoint: (s.visionEndpoint || '').trim() || undefined });
+    activeReq.promise.then(function (full) {
+      finishReq();
+      note.remove();
+      var env = LLM.extractJSON(full);
+      if (!env || env.type !== 'critique' || !Array.isArray(env.issues)) {
+        dbg('warn', 'vision: unusable critique: ' + String(full).slice(0, 200));
+        addMsg('sys', t('msg.visionFail'));
+        return;
+      }
+      if (!env.issues.length) { addMsg('sys', t('msg.visionOk')); return; }
+      var im = addMsg('sys', t('msg.visionIssues', { n: env.issues.length }) + '\n👁 ' + env.issues.join('\n👁 '));
+      im.title = env.issues.join('\n');
+      // One text-model fix round; depth 3 prevents further automatic loops.
+      if (LLM.settings().autoRepair !== false) runRepair(env.issues, 3);
+    }).catch(function (err) {
+      finishReq();
+      note.remove();
+      addMsg('sys', (err && err.name === 'AbortError') ? t('msg.stopped') : t('msg.visionFail'));
+    });
   }
 
   // Silent AI round that fixes lint findings with a minimal patch.
@@ -785,6 +832,8 @@
     $('setStrict').value = s.strictJson || 'auto';
     $('setTwoPass').checked = s.twoPass !== false;
     $('setRepair').checked = s.autoRepair !== false;
+    $('setVision').checked = !!s.visionReview;
+    $('setVisionEP').value = s.visionEndpoint || '';
     $('setAframe').value = s.aframeVersion;
     $('setLang').value = s.language || I18n.getLang();
     $('setTestResult').textContent = '';
@@ -802,7 +851,9 @@
       language: $('setLang').value,
       strictJson: $('setStrict').value,
       twoPass: $('setTwoPass').checked,
-      autoRepair: $('setRepair').checked
+      autoRepair: $('setRepair').checked,
+      visionReview: $('setVision').checked,
+      visionEndpoint: $('setVisionEP').value.trim()
     };
   }
 

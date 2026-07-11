@@ -141,6 +141,37 @@
     return msgs;
   }
 
+  /* Vision critique: renders of the current design are shown to a multimodal
+   * model, which reports visual/structural problems as a short issue list.
+   * Those issues then feed the normal (text-model) repair loop. */
+  function buildVisionMessages(design, userText, images) {
+    var lang = window.I18n ? window.I18n.getLang() : 'en';
+    var sys = [
+      'You are an expert carpenter reviewing 3D renders of a DIY woodworking design for buildability problems.',
+      'The renders show the same model from several angles. Dark discs on panels mark through-hole cutouts.',
+      'Look for: parts floating in the air or lacking support; parts intersecting/passing through each other;',
+      'misaligned or asymmetric members; missing structural members (nothing holds something up); parts sticking',
+      'out past the design; proportions or features that contradict the USER REQUEST.',
+      'Reply with EXACTLY ONE JSON object, nothing else:',
+      '{"type":"critique","issues":["...", "..."]}',
+      'Up to 6 issues. Each issue is ONE sentence, concrete and actionable, naming the part ids involved',
+      '(e.g. "top_panel floats above frame_long_front at the back edge — nothing supports the rear elevation").',
+      'If the design looks structurally correct and matches the request, reply {"type":"critique","issues":[]}.'
+    ].join('\n');
+    if (lang === 'de') sys += '\nWrite the issue sentences in German; keep part ids and JSON keys unchanged.';
+    var partLines = (design.parts || []).map(function (p) {
+      var dm = p.dimensions;
+      var dims = p.shape === 'cylinder' ? ('Ø' + dm.radius * 2 + '×' + dm.height) : (dm.x + '×' + dm.y + '×' + dm.z);
+      return p.id + ': ' + dims + 'mm @ (' + p.position.x + ',' + p.position.y + ',' + p.position.z + ')' +
+        ((p.cutouts && p.cutouts.length) ? ' [' + p.cutouts.length + ' cutout(s)]' : '');
+    }).join('\n');
+    var content = [{ type: 'text', text: 'USER REQUEST: ' + userText + '\n\nPARTS (id: WxHxD @ center, mm, y-up, floor at y=0):\n' + partLines + '\n\nRenders follow (iso front-left, iso back-right, low front):' }];
+    images.forEach(function (url) {
+      content.push({ type: 'image_url', image_url: { url: url } });
+    });
+    return [{ role: 'system', content: sys }, { role: 'user', content: content }];
+  }
+
   /* Repair turn: automated lint findings fed back for a minimal fix. */
   function buildRepairMessages(design, issues) {
     var lang = window.I18n ? window.I18n.getLang() : 'en';
@@ -198,6 +229,7 @@
     systemPrompt: systemPrompt,
     buildMessages: buildMessages,
     buildPlanMessages: buildPlanMessages,
+    buildVisionMessages: buildVisionMessages,
     buildRepairMessages: buildRepairMessages
   };
 })();

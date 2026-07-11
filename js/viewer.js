@@ -636,6 +636,27 @@
     } catch (e) { return null; }
   }
 
+  /* Capture the design from several angles (for vision-model review).
+   * Returns array of JPEG data URLs; camera state is restored afterwards. */
+  function captureViews(width) {
+    var oc = camEl && camEl.components['orbit-cam'];
+    if (!oc || !design || !design.parts.length) return [];
+    var saved = { az: oc.azimuth, po: oc.polar, r: oc.radius, t: oc.target.clone() };
+    fitView();
+    var shots = [];
+    // front-left iso, back-right iso, low front (support/floor problems show here)
+    [[Math.PI / 4, Math.PI / 3], [-3 * Math.PI / 4, Math.PI / 3], [0, Math.PI / 2.1]].forEach(function (v) {
+      oc.azimuth = v[0]; oc.polar = v[1];
+      oc.update3D();
+      var shot = screenshot(width || 512);
+      if (shot) shots.push(shot);
+    });
+    oc.azimuth = saved.az; oc.polar = saved.po; oc.radius = saved.r;
+    oc.target.copy(saved.t);
+    oc.update3D();
+    return shots;
+  }
+
   function focusPart(id) {
     var p = design && design.parts.find(function (q) { return q.id === id; });
     if (!p || !camEl.components['orbit-cam']) return;
@@ -672,6 +693,7 @@
     refreshMaterials: refreshMaterials,
     fitView: fitView,
     focusPart: focusPart,
-    screenshot: screenshot
+    screenshot: screenshot,
+    captureViews: captureViews
   };
 })();
