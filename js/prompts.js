@@ -154,8 +154,13 @@
       'out past the design; proportions or features that contradict the USER REQUEST.',
       'Reply with EXACTLY ONE JSON object, nothing else:',
       '{"type":"critique","issues":["...", "..."]}',
-      'Up to 6 issues. Each issue is ONE sentence, concrete and actionable, naming the part ids involved',
+      'Up to 3 issues. Each issue is ONE sentence, concrete and actionable, naming the part ids involved',
       '(e.g. "top_panel floats above frame_long_front at the back edge — nothing supports the rear elevation").',
+      'Report ONLY defects you are CONFIDENT about and that are clearly visible in the renders.',
+      'Do NOT report: perspective or rendering artifacts; shading, texture or color; the dark discs (they mark',
+      'intended cutout holes); stylistic preferences; or anything you cannot verify from the images + part list.',
+      'Cross-check each suspicion against the part coordinates before reporting it.',
+      'An empty list is a good answer — do not invent problems.',
       'If the design looks structurally correct and matches the request, reply {"type":"critique","issues":[]}.'
     ].join('\n');
     if (lang === 'de') sys += '\nWrite the issue sentences in German; keep part ids and JSON keys unchanged.';
@@ -172,15 +177,23 @@
     return [{ role: 'system', content: sys }, { role: 'user', content: content }];
   }
 
-  /* Repair turn: automated lint findings fed back for a minimal fix. */
-  function buildRepairMessages(design, issues) {
+  /* Repair turn: automated lint findings fed back for a minimal fix.
+   * visual=true marks findings from the vision critic, which may be wrong —
+   * the model must verify each claim against the coordinates first. */
+  function buildRepairMessages(design, issues, visual) {
     var lang = window.I18n ? window.I18n.getLang() : 'en';
+    var intro = visual
+      ? 'A VISUAL review of rendered images reported these POSSIBLE problems. Image reviews can be wrong:\n- ' +
+        issues.join('\n- ') +
+        '\n\nFIRST verify each claim against the part coordinates and dimensions in the JSON. Fix only the claims' +
+        ' that are geometrically real, with the smallest possible change. Silently ignore claims that the numbers disprove.'
+      : 'An automated geometry check found these problems:\n- ' + issues.join('\n- ') +
+        '\n\nFix ONLY these problems by adjusting positions/dimensions/joints minimally.';
     return [
       { role: 'system', content: systemPrompt(lang) },
       { role: 'user', content:
         'CURRENT DESIGN JSON:\n' + JSON.stringify(compactDesign(design)) +
-        '\n\nAn automated geometry check found these problems:\n- ' + issues.join('\n- ') +
-        '\n\nFix ONLY these problems by adjusting positions/dimensions/joints minimally.' +
+        '\n\n' + intro +
         ' Keep everything else exactly as it is (ids, names, materials, steps).' +
         ' Reply with a "patch" (preferred) or a full "design" with scope "modify".' }
     ];

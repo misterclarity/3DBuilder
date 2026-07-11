@@ -401,8 +401,14 @@
       if (!issues.length) { addMsg('sys', t('msg.visionOk')); return; }
       var im = addMsg('sys', t('msg.visionIssues', { n: issues.length }) + '\n👁 ' + issues.join('\n👁 '));
       im.title = issues.join('\n');
+      // Only act on issues that reference real part ids (hallucination filter), max 3.
+      var known = currentDesign.parts.map(function (p) { return p.id; });
+      var actionable = issues.filter(function (s) {
+        return known.some(function (id) { return s.indexOf(id) >= 0; });
+      }).slice(0, 3);
+      if (!actionable.length) { addMsg('sys', t('msg.visionNoActionable')); return; }
       // One text-model fix round; depth 3 prevents further automatic loops.
-      if (LLM.settings().autoRepair !== false) runRepair(issues, 3);
+      if (LLM.settings().autoRepair !== false) runRepair(actionable, 3, true);
     }).catch(function (err) {
       finishReq();
       note.remove();
@@ -437,25 +443,37 @@
     m.appendChild(det);
   }
 
-  // Silent AI round that fixes lint findings with a minimal patch.
-  function runRepair(issues, depth) {
+  // Silent AI round that fixes findings with a minimal patch. visual=true for
+  // vision-critic findings. A quality gate refuses fixes that make the
+  // geometry measurably worse than what we have.
+  function runRepair(issues, depth, visual) {
+    var baseline = Schema.lintDesign(currentDesign).length;
     var note = addMsg('sys', t('msg.repairing', { n: issues.length }));
     $('btnSend').classList.add('hidden');
     $('btnStop').classList.remove('hidden');
-    activeReq = LLM.chat(Prompts.buildRepairMessages(currentDesign, issues), null, { responseSchema: Schema.ENVELOPE });
+    activeReq = LLM.chat(Prompts.buildRepairMessages(currentDesign, issues, visual), null, { responseSchema: Schema.ENVELOPE });
+
+    function gateAndApply(env, v, notes) {
+      if (!v.ok) { addMsg('sys', t('msg.repairFail')); return; }
+      if (Schema.lintDesign(v.design).length > baseline) {
+        dbg('warn', 'repair rejected: candidate has more lint issues than baseline (' + Schema.lintDesign(v.design).length + ' > ' + baseline + ')');
+        addMsg('sys', t('msg.repairSkipped'));
+        return;
+      }
+      env.scope = 'modify';
+      env.summary = env.summary || t('msg.repaired');
+      applyDesignEnvelope(env, v, notes, depth);
+    }
+
     activeReq.promise.then(function (full) {
       finishReq();
       note.remove();
       var env = LLM.extractJSON(full);
       if (env && env.type === 'patch' && currentDesign) {
         var pr = Schema.applyPatch(currentDesign, env.ops || []);
-        env.scope = 'modify';
-        env.summary = env.summary || t('msg.repaired');
-        applyDesignEnvelope(env, Schema.validate(pr.design), pr.notes, depth);
+        gateAndApply(env, Schema.validate(pr.design), pr.notes);
       } else if (env && env.type === 'design') {
-        env.scope = 'modify';
-        env.summary = env.summary || t('msg.repaired');
-        applyDesignEnvelope(env, Schema.validate(env.design), [], depth);
+        gateAndApply(env, Schema.validate(env.design), []);
       } else if (env && (env.type === 'chat' || env.type === 'clarify') && env.message) {
         // The model answered in prose instead of fixing — show it so the user can react.
         addMsg('ai', env.message);
