@@ -373,7 +373,9 @@
   function runVisionReview(s) {
     if (activeReq || !currentDesign) return;
     var shots = Viewer.captureViews(512);
-    if (!shots.length) { dbg('warn', 'vision: no screenshots captured'); return; }
+    if (!shots.length) { dbg('error', 'vision: no screenshots captured (WebGL canvas unreadable?)'); return; }
+    var kb = Math.round(shots.reduce(function (a, u) { return a + u.length; }, 0) * 0.75 / 1024);
+    dbg('info', 'vision: sending ' + shots.length + ' renders (~' + kb + ' KB) to ' + ((s.visionEndpoint || '').trim() || 'main endpoint'));
     var note = addMsg('sys', t('msg.visionChecking'));
     $('btnSend').classList.add('hidden');
     $('btnStop').classList.remove('hidden');
@@ -383,21 +385,56 @@
       finishReq();
       note.remove();
       var env = LLM.extractJSON(full);
-      if (!env || env.type !== 'critique' || !Array.isArray(env.issues)) {
-        dbg('warn', 'vision: unusable critique: ' + String(full).slice(0, 200));
-        addMsg('sys', t('msg.visionFail'));
+      // Lenient critique parsing: models phrase this in many ways.
+      var issues = null;
+      if (env) {
+        if (Array.isArray(env.issues)) issues = env.issues.map(function (x) { return String(x); });
+        else if (typeof env.issues === 'string' && env.issues.trim() && !/^(none|no( real)? issues?|ok)\b/i.test(env.issues.trim())) issues = [env.issues.trim()];
+        else if (env.type === 'critique') issues = [];
+        else if (env.message) { addMsg('ai', '👁 ' + env.message); return; } // critic answered in prose — show it
+      }
+      if (issues === null) {
+        dbg('error', 'vision: unusable reply: ' + String(full).slice(0, 300));
+        visionFailMsg(full, shots[0]);
         return;
       }
-      if (!env.issues.length) { addMsg('sys', t('msg.visionOk')); return; }
-      var im = addMsg('sys', t('msg.visionIssues', { n: env.issues.length }) + '\n👁 ' + env.issues.join('\n👁 '));
-      im.title = env.issues.join('\n');
+      if (!issues.length) { addMsg('sys', t('msg.visionOk')); return; }
+      var im = addMsg('sys', t('msg.visionIssues', { n: issues.length }) + '\n👁 ' + issues.join('\n👁 '));
+      im.title = issues.join('\n');
       // One text-model fix round; depth 3 prevents further automatic loops.
-      if (LLM.settings().autoRepair !== false) runRepair(env.issues, 3);
+      if (LLM.settings().autoRepair !== false) runRepair(issues, 3);
     }).catch(function (err) {
       finishReq();
       note.remove();
-      addMsg('sys', (err && err.name === 'AbortError') ? t('msg.stopped') : t('msg.visionFail'));
+      if (err && err.name === 'AbortError') { addMsg('sys', t('msg.stopped')); return; }
+      dbg('error', 'vision: request failed: ' + err.message);
+      visionFailMsg(err.message, shots[0]);
     });
+  }
+
+  // Failure message with diagnostics: the raw reply / server error and the
+  // first render that was sent, so the cause is visible at a glance.
+  function visionFailMsg(raw, shot) {
+    var m = addMsg('sys', t('msg.visionFail'));
+    var det = document.createElement('details');
+    var sum = document.createElement('summary');
+    sum.textContent = t('err.raw');
+    det.appendChild(sum);
+    if (raw) {
+      var pre = document.createElement('pre');
+      var txt = LLM.stripThink(String(raw));
+      pre.textContent = (txt || String(raw)).slice(0, 1500);
+      det.appendChild(pre);
+    }
+    if (shot) {
+      var img = document.createElement('img');
+      img.src = shot;
+      img.alt = 'render sent to the vision model';
+      img.style.maxWidth = '100%';
+      img.style.borderRadius = '6px';
+      det.appendChild(img);
+    }
+    m.appendChild(det);
   }
 
   // Silent AI round that fixes lint findings with a minimal patch.
