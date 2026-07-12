@@ -14,6 +14,7 @@
     <button id="btnNew" data-i18n="btn.new">New</button>
     <button id="btnSave" data-i18n="btn.save">Save</button>
     <button id="btnLibrary" data-i18n="btn.library">Library</button>
+    <button id="btnInventory" data-i18n="btn.inventory" title="Standard parts & cuts the AI designs from">📦 Stock</button>
     <button id="btnExport" data-i18n="btn.export">Export</button>
     <button id="btnObj" data-i18n="btn.obj" title="Export 3D model (.obj + .mtl)">OBJ</button>
     <button id="btnPdf" data-i18n="btn.pdf" title="Export plans as PDF (2D views + cut list + assembly)">PDF</button>
@@ -163,6 +164,26 @@
   </div>
 </div>
 
+<!-- Inventory modal -->
+<div id="inventoryModal" class="modal hidden">
+  <div class="modalBox wide">
+    <h2 data-i18n="inv.title">Stock inventory</h2>
+    <small data-i18n="inv.hint">Standard parts and cuts the AI designs from first. P = assembly priority (1 = build first), C = complexity (1 = easy). Edit freely — saved in your browser.</small>
+    <h3 data-i18n="inv.parts">Parts</h3>
+    <div class="invWrap"><table class="cut" id="invParts"></table></div>
+    <button id="invAddPart" data-i18n="inv.addPart">+ Add part</button>
+    <h3 data-i18n="inv.cuts">Cuts &amp; operations</h3>
+    <div class="invWrap"><table class="cut" id="invCuts"></table></div>
+    <button id="invAddCut" data-i18n="inv.addCut">+ Add cut</button>
+    <div class="modalBtns">
+      <button id="invReset" data-i18n="inv.reset">Reset to defaults</button>
+      <span class="spacer"></span>
+      <button id="invCancel" data-i18n="btn.cancel">Cancel</button>
+      <button id="invSave" class="primary" data-i18n="btn.save">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Library modal -->
 <div id="libraryModal" class="modal hidden">
   <div class="modalBox">
@@ -177,6 +198,7 @@
 <script src="js/i18n.js"></script>
 <script src="js/schema.js"></script>
 <script src="js/materials.js"></script>
+<script src="js/inventory.js"></script>
 <script src="js/llm.js"></script>
 <script src="js/prompts.js"></script>
 <script src="js/storage.js"></script>

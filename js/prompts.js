@@ -10,6 +10,8 @@
       '',
       window.Schema.DOC,
       '',
+      (window.Inventory ? Inventory.promptBlock() : ''),
+      '',
       'RESPONSE PROTOCOL — you must reply with EXACTLY ONE JSON object (no prose outside it), one of:',
       '1. A complete design:',
       '   { "type": "design", "scope": "new" | "modify", "summary": "1-3 sentences about the design and key choices", "design": { ...full design JSON per schema above... } }',
@@ -114,13 +116,18 @@
       '3. Otherwise: a plain-text plan (NO JSON, no code fences) with exactly these sections:',
       '   NAME: short project name',
       '   OVERALL: outer dimensions W x D x H in mm, key clearances and assumptions',
-      '   MEMBERS: numbered list of ALL parts — count, cross-section, length, stock (e.g. "4x leg 70x70mm post, 720mm")',
+      '   MEMBERS: numbered list of ALL parts — count, cross-section, length, stock. Choose every member from the',
+      '            STOCK INVENTORY below whenever possible (e.g. "4x leg — Post 70x70mm, 720mm"); flag anything custom.',
       '   POSITIONS: the coordinate logic with arithmetic shown (e.g. "slat gap = (2000 - 2*28 - 12*70) / 13 = 82.5mm")',
       '   JOINERY: which joint type connects what, and why',
       '   ASSEMBLY ORDER: 4-8 short ordered steps',
       'Rules: metric mm; realistic commercially available stock sizes; gravity-sound structure;',
       'unsupported spans under 800 mm; assume sensible defaults for minor details and STATE them instead of asking.'
     ];
+    if (window.Inventory) {
+      p.push('');
+      p.push(Inventory.promptBlock());
+    }
     if (lang === 'de') {
       p.push('');
       p.push('LANGUAGE: The user speaks German. Write the plan and any "message"/"questions" in natural German.');

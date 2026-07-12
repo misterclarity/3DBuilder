@@ -819,6 +819,86 @@
     this.value = '';
   };
 
+  // ---------- inventory ----------
+  function invPartRow(p) {
+    var tr = document.createElement('tr');
+    tr.className = 'invRow';
+    tr.innerHTML =
+      '<td><input data-f="name" value="' + esc(p.name) + '"></td>' +
+      '<td><input data-f="section" value="' + esc(p.section) + '" style="width:110px"></td>' +
+      '<td><input data-f="maxLen" type="number" min="0" value="' + (p.maxLen || '') + '" style="width:72px"></td>' +
+      '<td><input data-f="species" value="' + esc(p.species) + '" style="width:100px"></td>' +
+      '<td><input data-f="priority" type="number" min="1" max="5" value="' + (p.priority || 3) + '" style="width:44px"></td>' +
+      '<td><input data-f="complexity" type="number" min="1" max="5" value="' + (p.complexity || 1) + '" style="width:44px"></td>' +
+      '<td><input data-f="use" value="' + esc(p.use) + '"></td>' +
+      '<td><button class="invDel" title="Remove">✕</button></td>';
+    tr.querySelector('.invDel').onclick = function () { tr.remove(); };
+    return tr;
+  }
+
+  function invCutRow(c) {
+    var tr = document.createElement('tr');
+    tr.className = 'invRow';
+    tr.innerHTML =
+      '<td><input data-f="name" value="' + esc(c.name) + '" style="width:170px"></td>' +
+      '<td><input data-f="complexity" type="number" min="1" max="5" value="' + (c.complexity || 1) + '" style="width:44px"></td>' +
+      '<td><input data-f="note" value="' + esc(c.note) + '"></td>' +
+      '<td><button class="invDel" title="Remove">✕</button></td>';
+    tr.querySelector('.invDel').onclick = function () { tr.remove(); };
+    return tr;
+  }
+
+  function renderInventory(inv) {
+    var pt = $('invParts');
+    pt.innerHTML = '<tr><th>' + [t('inv.hName'), t('inv.hSection'), t('inv.hMax'), t('inv.hSpecies'), 'P', 'C', t('inv.hUse'), ''].join('</th><th>') + '</th></tr>';
+    inv.parts.forEach(function (p) { pt.appendChild(invPartRow(p)); });
+    var ct = $('invCuts');
+    ct.innerHTML = '<tr><th>' + [t('inv.hName'), 'C', t('inv.hNote'), ''].join('</th><th>') + '</th></tr>';
+    inv.cuts.forEach(function (c) { ct.appendChild(invCutRow(c)); });
+  }
+
+  function collectInventory() {
+    var inv = { parts: [], cuts: [] };
+    function val(tr, f) { var el = tr.querySelector('[data-f=' + f + ']'); return el ? el.value.trim() : ''; }
+    function num15(v, d) { return Math.min(5, Math.max(1, Number(v) || d)); }
+    $('invParts').querySelectorAll('tr.invRow').forEach(function (tr) {
+      var name = val(tr, 'name');
+      if (!name) return;
+      inv.parts.push({
+        name: name, section: val(tr, 'section'), maxLen: Number(val(tr, 'maxLen')) || 0,
+        species: val(tr, 'species'), priority: num15(val(tr, 'priority'), 3),
+        complexity: num15(val(tr, 'complexity'), 1), use: val(tr, 'use')
+      });
+    });
+    $('invCuts').querySelectorAll('tr.invRow').forEach(function (tr) {
+      var name = val(tr, 'name');
+      if (!name) return;
+      inv.cuts.push({ name: name, complexity: num15(val(tr, 'complexity'), 1), note: val(tr, 'note') });
+    });
+    return inv;
+  }
+
+  $('btnInventory').onclick = function () {
+    renderInventory(Inventory.get());
+    $('inventoryModal').classList.remove('hidden');
+  };
+  $('invCancel').onclick = function () { $('inventoryModal').classList.add('hidden'); };
+  $('invAddPart').onclick = function () {
+    $('invParts').appendChild(invPartRow({ name: '', section: '', maxLen: 2400, species: '', priority: 3, complexity: 1, use: '' }));
+  };
+  $('invAddCut').onclick = function () {
+    $('invCuts').appendChild(invCutRow({ name: '', complexity: 1, note: '' }));
+  };
+  $('invReset').onclick = function () {
+    if (confirm(t('inv.confirmReset'))) renderInventory(Inventory.reset());
+  };
+  $('invSave').onclick = function () {
+    var inv = collectInventory();
+    Inventory.save(inv);
+    $('inventoryModal').classList.add('hidden');
+    addMsg('sys', t('inv.saved', { p: inv.parts.length, c: inv.cuts.length }));
+  };
+
   // ---------- library ----------
   $('btnLibrary').onclick = function () { openLibrary(); };
   $('libClose').onclick = function () { $('libraryModal').classList.add('hidden'); };
