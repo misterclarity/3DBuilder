@@ -32,6 +32,14 @@ function modelList(env) {
     .split(',').map(function (s) { return s.trim(); }).filter(Boolean);
 }
 
+// Models that take adaptive thinking + output_config.effort (Opus 4.6+, Sonnet
+// 4.6/5, Fable/Mythos 5). Haiku 4.5 and older reject those params (400), so we
+// send them plain. This is THE lever that makes Claude reason before answering;
+// without it Opus runs in its weakest no-thinking mode.
+export function supportsAdaptive(model) {
+  return /opus-4-[678]|sonnet-(5|4-6)|fable-5|mythos-5/.test(String(model));
+}
+
 function corsHeaders(env) {
   return {
     'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN || '*',
@@ -89,12 +97,25 @@ export function toAnthropicRequest(body, env) {
   }
 
   const cap = Number(env.MAX_TOKENS_CAP) || 64000;
+  const adaptive = supportsAdaptive(model);
+  // With thinking on, part of the budget is spent reasoning before the JSON is
+  // written — floor the output budget higher so complex designs don't truncate.
+  const floor = adaptive ? 32000 : 16384;
   const req = {
     model: model,
-    max_tokens: Math.min(Math.max(1024, Number(body.max_tokens) || 16384), cap),
+    max_tokens: Math.min(cap, Math.max(Number(body.max_tokens) || 16384, floor)),
     messages: messages,
     stream: body.stream !== false
   };
+  if (adaptive) {
+    // Adaptive thinking is the whole reason to use Claude here: it reasons about
+    // the geometry/joinery before emitting JSON. effort (low|medium|high|xhigh|
+    // max) tunes how deep — "high" is a strong default; raise to "xhigh" for the
+    // hardest designs (slower/costlier). Thinking text is not forwarded to the
+    // app (display defaults to omitted), only the improved final answer.
+    req.thinking = { type: 'adaptive' };
+    req.output_config = { effort: (env.EFFORT || 'high').trim() };
+  }
   if (systemParts.length) {
     // cache_control: the app resends its large system prompt every turn —
     // caching it cuts repeated-prompt cost by ~90% during a demo session.
