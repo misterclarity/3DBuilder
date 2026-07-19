@@ -23,9 +23,10 @@ ALLOWED_ORIGIN = ""
 MODELS = "claude-opus-4-8,claude-sonnet-5,claude-haiku-4-5"
 
 # Reasoning depth for Opus/Sonnet: low | medium | high | xhigh | max.
-# "high" is a strong, snappy default. Raise to "xhigh" for the best design
-# quality on the hardest requests (slower and more tokens). Ignored by Haiku.
-EFFORT = "high"
+# "xhigh" = deep reasoning (the setting Claude Code uses for hard work); best
+# design quality, slower and more tokens. Drop to "high" if turns feel too slow.
+# Ignored by Haiku.
+EFFORT = "xhigh"
 
 # Best-effort per-day request cap (per worker isolate). The hard spend guard is
 # your Anthropic Console workspace spend limit / prepaid credits.

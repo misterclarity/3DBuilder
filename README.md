@@ -42,9 +42,9 @@ To showcase the app powered by Claude — billed to your Anthropic account, with
    npx wrangler secret put DEMO_TOKEN            # a long random string (ASCII recommended)
    ```
    `DEMO_TOKEN` is the unguessable token in the demo URL — you invent it; it is not from Anthropic.
-4. Share one link — the URL parameters preseed the settings (use the same token you set above):
+4. Share one link — the URL parameters preseed the settings (use the same token you set above). `&vision=1` turns on the AI visual review (Claude reads the rendered images well, and the same model does the critique via the proxy):
    ```
-   https://<you>.github.io/<repo>/?endpoint=https://diyw-claude-proxy.<account>.workers.dev/t/<DEMO_TOKEN>&model=claude-opus-4-8&lang=en
+   https://<you>.github.io/<repo>/?endpoint=https://diyw-claude-proxy.<account>.workers.dev/t/<DEMO_TOKEN>&model=claude-opus-4-8&lang=en&vision=1
    ```
 
 Both sides are HTTPS, so the mixed-content workaround below is not needed for the demo. **Switching models** (e.g. Sonnet vs Opus): ⚙ Settings → Model lists everything from `MODELS`, or hand out links with different `&model=` values. The proxy streams, translates the app's OpenAI-style requests to the Anthropic Messages API, **enables adaptive thinking** on Opus/Sonnet (this is what makes Claude reason about the geometry before answering — without it the model runs in a weak no-thinking mode that's no better than a local model), caches the system prompt (≈90% cheaper repeat turns), strips parameters Claude rejects, and forwards the vision-review images so the visual critique runs on Claude too. Reasoning depth is the `EFFORT` var in `wrangler.toml` (`high` default; `xhigh` for the hardest designs, slower/costlier). After the demo, delete the worker (`npx wrangler delete`) or rotate the key, and the link goes dead.

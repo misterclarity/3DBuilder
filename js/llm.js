@@ -2,17 +2,20 @@
 (function () {
   'use strict';
 
-  /* Demo-link bootstrap: ?endpoint=…&model=…&lang=… preseed the settings so a
-   * single shared URL works with zero setup (e.g. pointing at the Claude proxy:
-   * ?endpoint=https://….workers.dev/t/TOKEN&model=claude-opus-4-8). */
+  /* Demo-link bootstrap: ?endpoint=…&model=…&lang=…&vision=1 preseed the settings
+   * so a single shared URL works with zero setup (e.g. pointing at the Claude
+   * proxy: ?endpoint=https://….workers.dev/t/TOKEN&model=claude-opus-4-8&vision=1).
+   * vision=1 turns on the AI visual review — worthwhile with Claude, which reads
+   * the rendered images well; the same model does the critique via the proxy. */
   try {
     var q = new URLSearchParams(location.search);
-    if (q.get('endpoint') || q.get('model') || q.get('lang')) {
+    if (q.get('endpoint') || q.get('model') || q.get('lang') || q.get('vision') !== null) {
       var boot = {};
       try { boot = JSON.parse(localStorage.getItem('diyw_settings') || '{}'); } catch (e) { boot = {}; }
       if (q.get('endpoint')) boot.endpoint = q.get('endpoint');
       if (q.get('model') !== null) boot.model = q.get('model');
       if (q.get('lang')) boot.language = q.get('lang');
+      if (q.get('vision') !== null) boot.visionReview = /^(1|true|on|yes)$/i.test(q.get('vision'));
       localStorage.setItem('diyw_settings', JSON.stringify(boot));
       if (q.get('lang') && window.I18n) I18n.setLang(q.get('lang'));
       if (window.Debug) Debug.log('info', 'llm', 'Settings preseeded from URL parameters');
