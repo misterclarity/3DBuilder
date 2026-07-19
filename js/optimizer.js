@@ -24,6 +24,7 @@
     var sheetGroups = {}, boardGroups = {}, oversize = [];
 
     (design.parts || []).forEach(function (p) {
+      if ((p.material && p.material.species) === 'soil') return; // bought loose, not cut
       if (p.shape === 'cylinder') {
         var key = 'Ø' + Math.round(p.dimensions.radius * 2) + ' mm ' + (p.stock || p.material.species);
         (boardGroups[key] = boardGroups[key] || []).push({ len: p.dimensions.height, name: p.name });

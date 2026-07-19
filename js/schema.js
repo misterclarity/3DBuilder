@@ -11,6 +11,10 @@
   var JOINT_TYPES = ['screw', 'bolt', 'nail', 'glue', 'bracket', 'hinge', 'dowel', 'biscuit', 'domino',
     'pocket_hole', 'dado', 'groove', 'rabbet', 'lap', 'mortise_tenon', 'dovetail', 'miter', 'other'];
 
+  // Growth habits: control how a plant is rendered in 3D.
+  var PLANT_HABITS = ['leafy', 'bushy', 'vining', 'climbing', 'root', 'herb', 'flower', 'shrub', 'tree', 'grass'];
+  var CARE_FIELDS = ['sun', 'water', 'soil', 'planting', 'harvest', 'notes'];
+
   // Human/AI readable schema description (embedded into the LLM system prompt).
   var SCHEMA_DOC = [
     'DESIGN JSON SCHEMA (all lengths in millimeters, y-up, floor at y=0, positions are part CENTERS):',
@@ -52,6 +56,33 @@
     '- Keep part count reasonable (< 80). Identical parts get separate entries with ids like slat_1, slat_2.'
   ].join('\n');
 
+  // Garden extension: the "plants" array (embedded into the garden-mode LLM prompt).
+  var PLANT_DOC = [
+    'GARDEN EXTENSION — the design JSON additionally contains a "plants" array (and meta.mode = "garden"):',
+    '  "plants": [ {',
+    '    "id": str (unique snake_case, e.g. "tomato_1"),',
+    '    "name": str (display name, e.g. "Tomato (Roma) 1"),',
+    '    "species": str (lowercase common name, e.g. "tomato" — identical for all plants of the same kind),',
+    '    "habit": "leafy" | "bushy" | "vining" | "climbing" | "root" | "herb" | "flower" | "shrub" | "tree" | "grass",',
+    '    "position": {"x": mm, "y": mm, "z": mm} — y is the SOIL SURFACE the plant stands on:',
+    '                0 for open ground, or the soil fill height of its raised bed,',
+    '    "matureHeight": mm, "matureDiameter": mm (adult plant size),',
+    '    "spacing": mm (minimum center-to-center distance to a neighbor of the SAME species;',
+    '               distance to a DIFFERENT species must be at least the average of both spacings),',
+    '    "color": "#hex" (optional foliage/flower tint),',
+    '    "care": { "sun": str, "water": str, "soil": str, "planting": str (when + how to sow/transplant),',
+    '              "harvest": str, "notes": str (pruning, feeding, pests) } — fill EVERY field, the user reads',
+    '              this when clicking the plant,',
+    '    "companions": [species...] (grows well next to), "avoid": [species...] (keep away from)',
+    '  } ]',
+    'GARDEN RULES:',
+    '- Every plant MUST appear in exactly one assembly step\'s "parts" list (planting steps come after build steps).',
+    '- Raised beds/planters get a soil part: shape box, material.species "soil", stock "topsoil/compost mix",',
+    '  one prep operation {"type":"fill","instruction":"Fill with ... up to ... mm below the rim."}. Plants in that',
+    '  bed stand ON its soil surface (position.y = soil top).',
+    '- One entry per individual plant (tomato_1, tomato_2, …), not per species.'
+  ].join('\n');
+
   function num(v, d) { return (typeof v === 'number' && isFinite(v)) ? v : (d || 0); }
 
   function normVec(v, d) {
@@ -69,18 +100,20 @@
     var errors = [], warnings = [];
     if (!input || typeof input !== 'object') return { ok: false, errors: ['Design is not an object'], warnings: [] };
 
+    var inPlants = Array.isArray(input.plants) ? input.plants : [];
     var d = {
       schemaVersion: SCHEMA_VERSION,
       meta: {
         name: (input.meta && input.meta.name) || 'Untitled design',
         description: (input.meta && input.meta.description) || '',
-        units: 'mm'
+        units: 'mm',
+        mode: ((input.meta && input.meta.mode) === 'garden' || inPlants.length) ? 'garden' : 'workshop'
       },
-      parts: [], joints: [], hardware: [], assembly: [], finishing: []
+      parts: [], plants: [], joints: [], hardware: [], assembly: [], finishing: []
     };
 
     var parts = Array.isArray(input.parts) ? input.parts : [];
-    if (!parts.length) errors.push('Design has no parts');
+    if (!parts.length && !inPlants.length) errors.push('Design has no parts');
     var ids = {};
     parts.forEach(function (p, i) {
       if (!p || typeof p !== 'object') { warnings.push('Part #' + i + ' invalid, skipped'); return; }
@@ -143,6 +176,41 @@
       });
     });
 
+    // Plants (garden mode). They share the id namespace with parts so assembly
+    // steps can reference either.
+    inPlants.forEach(function (pl, i) {
+      if (!pl || typeof pl !== 'object') { warnings.push('Plant #' + i + ' invalid, skipped'); return; }
+      var id = slug(pl.id || pl.name || pl.species, i);
+      while (ids[id]) id = id + '_x';
+      ids[id] = true;
+      var species = String(pl.species || pl.name || id).toLowerCase().trim();
+      // Known species: the built-in plant catalog supplies defaults for
+      // everything the AI omitted (habit, sizes, spacing, companions, avoid).
+      var cat = window.PlantDB ? PlantDB.get(species) : null;
+      var care = pl.care || {};
+      var careOut = {};
+      CARE_FIELDS.forEach(function (f) { careOut[f] = care[f] ? String(care[f]) : ''; });
+      var dia = Math.max(20, num(pl.matureDiameter, cat ? cat.dia : 250));
+      function strList(a) {
+        return (Array.isArray(a) ? a : []).map(function (s) { return String(s).toLowerCase().trim(); }).filter(Boolean);
+      }
+      var comp = strList(pl.companions), avoid = strList(pl.avoid);
+      d.plants.push({
+        id: id,
+        name: pl.name || species || id,
+        species: species,
+        habit: PLANT_HABITS.indexOf(pl.habit) >= 0 ? pl.habit : (cat ? cat.habit : 'bushy'),
+        position: normVec(pl.position, 0),
+        matureHeight: Math.max(20, num(pl.matureHeight, cat ? cat.height : 300)),
+        matureDiameter: dia,
+        spacing: Math.max(10, num(pl.spacing, cat ? cat.spacing : dia)),
+        color: pl.color || null,
+        care: careOut,
+        companions: comp.length ? comp : (cat ? cat.companions.slice() : []),
+        avoid: avoid.length ? avoid : (cat ? cat.avoid.slice() : [])
+      });
+    });
+
     (Array.isArray(input.joints) ? input.joints : []).forEach(function (j, i) {
       if (!j || !Array.isArray(j.parts)) return;
       var jp = j.parts.map(function (pid) { return slug(pid, 0); }).filter(function (pid) { return ids[pid]; });
@@ -179,7 +247,7 @@
     // a part belongs to the step where it is ADDED, exactly once.
     // 1. Strip "bulk" steps ("cut all parts" style) that list nearly every part
     //    when those parts are also assigned to other steps.
-    var totalParts = d.parts.length;
+    var totalParts = d.parts.length + d.plants.length;
     if (d.assembly.length > 2 && totalParts >= 4) {
       d.assembly.forEach(function (s) {
         if (s.parts.length < totalParts * 0.8) return;
@@ -205,6 +273,11 @@
     if (orphans.length) {
       warnings.push('Parts missing from assembly steps (auto step added): ' + orphans.join(', '));
       d.assembly.push({ step: d.assembly.length + 1, title: 'Remaining parts', instruction: 'Attach the remaining parts.', parts: orphans, joints: [] });
+    }
+    var plantOrphans = d.plants.filter(function (p) { return !covered[p.id]; }).map(function (p) { return p.id; });
+    if (plantOrphans.length) {
+      warnings.push('Plants missing from assembly steps (planting step added): ' + plantOrphans.join(', '));
+      d.assembly.push({ step: d.assembly.length + 1, title: 'Planting', instruction: 'Plant the remaining plants at their marked positions.', parts: plantOrphans, joints: [] });
     }
     if (!d.assembly.length && d.parts.length) {
       d.assembly.push({ step: 1, title: 'Assemble', instruction: 'Assemble all parts.', parts: d.parts.map(function (p) { return p.id; }), joints: [] });
@@ -507,6 +580,10 @@
         if (Math.abs(bottom) > 0.01 && bottom > -8 && bottom < 8) { p.position.y -= bottom; res.floored++; }
       }
     });
+    (d.plants || []).forEach(function (p) {
+      ['x', 'y', 'z'].forEach(function (ax) { p.position[ax] = r05(p.position[ax]); });
+      if (p.position.y > -8 && p.position.y < 0) { p.position.y = 0; res.floored++; }
+    });
     var byId = {};
     (d.parts || []).forEach(function (p) { byId[p.id] = p; });
     (d.joints || []).forEach(function (j) {
@@ -599,6 +676,8 @@
       for (k = i + 1; k < parts.length; k++) {
         var a = parts[i], b = parts[k];
         if (bigRot(a) || bigRot(b)) continue;
+        // Soil fills conform around posts/walls — overlap is intended.
+        if ((a.material && a.material.species) === 'soil' || (b.material && b.material.species) === 'soil') continue;
         var jt = joined[a.id + '|' + b.id];
         if (jt && HOUSED[jt]) continue;      // housed joints (incl. through-tenons) interpenetrate by design
         // Joined parts model their joinery as overlap — give them slack.
@@ -629,9 +708,10 @@
       issues.push('The hardware list is empty although the design uses fasteners — add every screw/bolt/fitting with quantity and size.');
     }
 
-    // 5. assembly step sanity (fixable via set_assembly)
+    // 5. assembly step sanity (fixable via set_assembly). Plants count as
+    // steppable items too (planting steps legitimately add many at once).
     var steps = d.assembly || [];
-    var np = parts.length;
+    var np = parts.length + (d.plants || []).length;
     if (np >= 6 && steps.length && steps.length < 3) {
       issues.push('Only ' + steps.length + ' assembly step(s) for ' + np + ' parts — replace the assembly (set_assembly) with 5-10 ordered steps, each adding a small connected group of parts.');
     }
@@ -658,6 +738,31 @@
           }
           placed[pid] = true;
         });
+      }
+    }
+
+    // 6. garden lints: plants below ground, spacing violations, bad companions nearby
+    var plants = d.plants || [];
+    if (plants.length) {
+      plants.forEach(function (p) {
+        if (p.position.y < -1) issues.push('Plant "' + p.id + '" sits ' + Math.round(-p.position.y) + ' mm below the ground (y=0).');
+      });
+      var gardenIssues = 0;
+      for (i = 0; i < plants.length && gardenIssues < 6; i++) {
+        for (k = i + 1; k < plants.length && gardenIssues < 6; k++) {
+          var pa = plants[i], pb = plants[k];
+          var dist = Math.round(Math.sqrt(
+            Math.pow(pa.position.x - pb.position.x, 2) + Math.pow(pa.position.z - pb.position.z, 2)));
+          // Same species: full spacing. Different species: average of both spacings.
+          var req = pa.species === pb.species ? Math.max(pa.spacing, pb.spacing) : (pa.spacing + pb.spacing) / 2;
+          if (dist < req * 0.9) {
+            issues.push('Plants "' + pa.id + '" and "' + pb.id + '" are ' + dist + ' mm apart but need ~' + Math.round(req) + ' mm — move them apart (update_plant).');
+            gardenIssues++;
+          } else if (dist < req * 1.6 && (pa.avoid.indexOf(pb.species) >= 0 || pb.avoid.indexOf(pa.species) >= 0)) {
+            issues.push('"' + pa.id + '" (' + pa.species + ') and "' + pb.id + '" (' + pb.species + ') are bad companions and stand only ' + dist + ' mm apart — separate them or move one to another bed.');
+            gardenIssues++;
+          }
+        }
       }
     }
 
@@ -729,6 +834,7 @@
     var d = JSON.parse(JSON.stringify(base));
     d.joints = d.joints || []; d.hardware = d.hardware || [];
     d.assembly = d.assembly || []; d.finishing = d.finishing || [];
+    d.plants = d.plants || [];
     var notes = [];
 
     function merge(target, src) {
@@ -764,6 +870,23 @@
           if (p) mergePart(p, o.set);
           else notes.push('patch: unknown part "' + o.id + '"');
           break;
+        case 'add_plant':
+          if (o.plant) d.plants.push(o.plant);
+          break;
+        case 'remove_plant':
+          d.plants = d.plants.filter(function (p) { return p.id !== o.id; });
+          d.assembly.forEach(function (s) { s.parts = (s.parts || []).filter(function (x) { return x !== o.id; }); });
+          break;
+        case 'update_plant':
+          var pl = d.plants.find(function (p) { return p.id === o.id; });
+          if (pl) {
+            Object.keys(o.set || {}).forEach(function (k) {
+              var nested = (k === 'position' || k === 'care');
+              if (nested && o.set[k] && typeof o.set[k] === 'object' && pl[k] && typeof pl[k] === 'object') merge(pl[k], o.set[k]);
+              else pl[k] = o.set[k];
+            });
+          } else notes.push('patch: unknown plant "' + o.id + '"');
+          break;
         case 'add_joint':
           if (o.joint) d.joints.push(o.joint);
           break;
@@ -783,6 +906,56 @@
       }
     });
     return { design: d, notes: notes };
+  }
+
+  /* ---------- translation merge ----------
+   * Take ONLY human-readable text fields from a translated design and apply
+   * them to a deep copy of the base design. Geometry, ids, species keys and
+   * enums cannot be affected by construction. Empty care fields stay empty
+   * (they resolve from the plant catalog in the UI language). */
+  function mergeTexts(base, tr) {
+    var d = JSON.parse(JSON.stringify(base));
+    tr = tr || {};
+    function txt(target, src, keys) {
+      if (!src) return;
+      keys.forEach(function (k) { if (typeof src[k] === 'string' && src[k]) target[k] = src[k]; });
+    }
+    function indexBy(arr) {
+      var m = {};
+      (Array.isArray(arr) ? arr : []).forEach(function (x) { if (x && x.id) m[x.id] = x; });
+      return m;
+    }
+    txt(d.meta, tr.meta, ['name', 'description']);
+    var trParts = indexBy(tr.parts);
+    (d.parts || []).forEach(function (p) {
+      var s = trParts[p.id];
+      if (!s) return;
+      txt(p, s, ['name', 'stock']);
+      if (p.prep && s.prep) {
+        txt(p.prep, s.prep, ['notes']);
+        (p.prep.operations || []).forEach(function (o, i) {
+          var so = s.prep.operations && s.prep.operations[i];
+          if (so && typeof so.instruction === 'string' && so.instruction) o.instruction = so.instruction;
+        });
+      }
+    });
+    var trPlants = indexBy(tr.plants);
+    (d.plants || []).forEach(function (p) {
+      var s = trPlants[p.id];
+      if (!s) return;
+      txt(p, s, ['name']);
+      if (p.care && s.care) {
+        CARE_FIELDS.forEach(function (k) {
+          if (p.care[k] && typeof s.care[k] === 'string' && s.care[k]) p.care[k] = s.care[k];
+        });
+      }
+    });
+    var trJoints = indexBy(tr.joints);
+    (d.joints || []).forEach(function (j) { txt(j, trJoints[j.id], ['note']); });
+    (d.hardware || []).forEach(function (hw, i) { txt(hw, tr.hardware && tr.hardware[i], ['name', 'note']); });
+    (d.assembly || []).forEach(function (st, i) { txt(st, tr.assembly && tr.assembly[i], ['title', 'instruction']); });
+    (d.finishing || []).forEach(function (f, i) { txt(f, tr.finishing && tr.finishing[i], ['title', 'instruction']); });
+    return d;
   }
 
   /* ---------- JSON Schema of the response envelope (for response_format json_schema) ----------
@@ -809,7 +982,26 @@
     }, required: ['shape', 'diameter'] } }
   };
   var J_PART = { type: 'object', properties: J_PART_PROPS, required: ['id', 'name', 'shape', 'dimensions', 'position'] };
-  var J_PART_SET = { type: 'object', properties: J_PART_PROPS };
+  var J_CARE = { type: 'object', properties: {
+    sun: { type: 'string' }, water: { type: 'string' }, soil: { type: 'string' },
+    planting: { type: 'string' }, harvest: { type: 'string' }, notes: { type: 'string' }
+  } };
+  var J_PLANT_PROPS = {
+    id: { type: 'string' }, name: { type: 'string' }, species: { type: 'string' },
+    habit: { enum: PLANT_HABITS },
+    position: J_VEC,
+    matureHeight: { type: 'number' }, matureDiameter: { type: 'number' }, spacing: { type: 'number' },
+    color: { type: ['string', 'null'] }, care: J_CARE,
+    companions: { type: 'array', items: { type: 'string' } },
+    avoid: { type: 'array', items: { type: 'string' } }
+  };
+  var J_PLANT = { type: 'object', properties: J_PLANT_PROPS, required: ['id', 'species', 'position'] };
+  // "set" of update_part/update_plant: union of both property spaces (grammar
+  // compilers disallow undeclared keys, so everything must be listed).
+  var J_SET_PROPS = {};
+  Object.keys(J_PART_PROPS).forEach(function (k) { J_SET_PROPS[k] = J_PART_PROPS[k]; });
+  Object.keys(J_PLANT_PROPS).forEach(function (k) { if (!J_SET_PROPS[k]) J_SET_PROPS[k] = J_PLANT_PROPS[k]; });
+  var J_PART_SET = { type: 'object', properties: J_SET_PROPS };
   var J_JOINT = { type: 'object', properties: {
     id: { type: 'string' }, type: { enum: JOINT_TYPES },
     parts: { type: 'array', items: { type: 'string' } }, position: J_VEC, note: { type: 'string' }
@@ -824,16 +1016,17 @@
     parts: { type: 'array', items: { type: 'string' } }
   }, required: ['step', 'title', 'instruction'] };
   var J_DESIGN = { type: 'object', properties: {
-    meta: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, units: { type: 'string' } }, required: ['name'] },
+    meta: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, units: { type: 'string' }, mode: { enum: ['workshop', 'garden'] } }, required: ['name'] },
     parts: { type: 'array', items: J_PART },
+    plants: { type: 'array', items: J_PLANT },
     joints: { type: 'array', items: J_JOINT },
     hardware: { type: 'array', items: J_HARDWARE },
     assembly: { type: 'array', items: J_STEP },
     finishing: { type: 'array', items: J_FINISH }
   }, required: ['meta', 'parts', 'assembly'] };
   var J_OP = { type: 'object', properties: {
-    op: { enum: ['update_meta', 'add_part', 'remove_part', 'update_part', 'add_joint', 'update_joint', 'remove_joint', 'set_hardware', 'set_assembly', 'set_finishing'] },
-    id: { type: 'string' }, set: J_PART_SET, part: J_PART, joint: J_JOINT,
+    op: { enum: ['update_meta', 'add_part', 'remove_part', 'update_part', 'add_plant', 'remove_plant', 'update_plant', 'add_joint', 'update_joint', 'remove_joint', 'set_hardware', 'set_assembly', 'set_finishing'] },
+    id: { type: 'string' }, set: J_PART_SET, part: J_PART, plant: J_PLANT, joint: J_JOINT,
     hardware: { type: 'array', items: J_HARDWARE },
     assembly: { type: 'array', items: J_STEP },
     finishing: { type: 'array', items: J_FINISH }
@@ -848,10 +1041,14 @@
   window.Schema = {
     VERSION: SCHEMA_VERSION,
     DOC: SCHEMA_DOC,
+    PLANT_DOC: PLANT_DOC,
     JOINT_TYPES: JOINT_TYPES,
+    PLANT_HABITS: PLANT_HABITS,
+    CARE_FIELDS: CARE_FIELDS,
     ENVELOPE: ENVELOPE_SCHEMA,
     validate: validate,
     applyPatch: applyPatch,
+    mergeTexts: mergeTexts,
     snapDesign: snapDesign,
     lintDesign: lintDesign,
     retargetJoints: retargetJoints,

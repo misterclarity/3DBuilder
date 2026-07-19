@@ -12,7 +12,9 @@
     mahogany: { base: '#7e3b26', dark: '#571f10', rings: 18 },
     plywood:  { base: '#dec294', dark: '#c2a370', rings: 6 },
     mdf:      { base: '#c8b08a', dark: '#b89f7c', rings: 0 },
-    metal:    { base: '#9aa2ab', dark: '#7b838c', rings: 0 }
+    metal:    { base: '#9aa2ab', dark: '#7b838c', rings: 0 },
+    larch:    { base: '#c99a66', dark: '#9a6f42', rings: 16 },
+    soil:     { base: '#4a3b2c', dark: '#38291c', rings: 0 }
   };
 
   var texCache = {};

@@ -5,6 +5,10 @@ A static web app for designing DIY (mainly wood) projects with a local AI. Descr
 ## Features
 
 - **Chat-driven design** — natural language generation and modification ("split the selected piece in 2 and connect them via hinge"). The AI asks clarifying questions when your request lacks the data it needs.
+- **Garden mode (🌱)** — toggle in the top bar. The AI designs gardens instead of furniture: raised beds, planters and trellises built like woodwork (cut list + assembly included), plus the planting plan inside them. The AI chooses companion plants, decides spacing, and generates per-plant care data — click a plant in 3D for sun/water/soil/planting/harvest instructions. Plants render as procedural 3D shapes with name labels (or flat icon billboards — switch in ⚙ Settings). Spacing violations and bad plant neighbors are linted and auto-repaired like geometry problems. A sample vegetable bed (tomatoes + basil, onions guarding the carrots, lettuce in front) loads as the default garden design.
+- **Plant catalog** — a built-in bilingual (EN/DE) database of ~60 species: vegetables, herbs, berries, fruit trees (apple, pear, cherry, plum, peach, apricot, quince, fig, walnut, hazel) and ornamental trees/shrubs. The AI designs from it before inventing anything: sizes, spacing, companions and care texts come from the catalog, and care always displays in the current UI language. Browse and edit it via 📦 Stock while in garden mode: add your own species, tweak spacing/companions, edit the care texts in both languages (📝) — changes persist in your browser and feed straight into the AI prompts; a separate "Reset plants" restores the built-ins.
+- **AI design translation** — switching EN↔DE regenerates the built-in samples in the new language; for your own designs a one-click "🌐 Translate" action appears in the chat. Only text fields are merged back, so geometry cannot be affected.
+- **Blender bridge (optional, off by default)** — enable in ⚙ Settings to connect a local headless Blender. Requires [Blender](https://www.blender.org/download/) 3.6+ (free); start it with `blender --background --python tools/blender_bridge.py` and keep the terminal open. Adds: **📷 Render** (photoreal Cycles image of the current design, incl. plants, into the chat), **STL/GLB export** with cutouts as real boolean holes (STL in mm for 3D printing), and the AI **vision review** judges proper renders instead of WebGL screenshots. When off — or when the bridge is unreachable — the app behaves exactly as before.
 - **Desktop 3D viewer** — drag to orbit, wheel to zoom, right-drag to pan. Click a part for dimensions, stock, prep operations and connections. Ctrl+click for multi-select. Exploded view slider.
 - **Cut & Prep mode** — all parts laid out flat on a virtual workbench with labels, like a cutting diagram.
 - **Assembly mode** — step-by-step build: parts appear per step, current parts pulse, joints highlight.
@@ -23,6 +27,27 @@ A static web app for designing DIY (mainly wood) projects with a local AI. Descr
 ## AI server
 
 Any OpenAI-compatible endpoint works. Default: `http://100.119.213.123:8080/v1`, model `qwen3.6-27b-mtp` (change in ⚙ Settings). The server must allow CORS (llama.cpp `llama-server` does by default).
+
+### Demo with Claude (share a link that just works)
+
+To showcase the app powered by Claude — billed to your Anthropic account, with nothing for the visitor to set up — deploy the included proxy, which keeps your API key server-side:
+
+1. Create an API key at [platform.claude.com](https://platform.claude.com), load a small prepaid credit amount and set a **workspace spend limit** (this is the hard cost guard).
+2. (Optional) Edit `tools/claude-proxy/wrangler.toml`: set `ALLOWED_ORIGIN` to your GitHub Pages origin (e.g. `"https://you.github.io"`) as an extra guard, and adjust the `MODELS` list that feeds the app's model dropdown (first entry is the default). **No secrets go in this file** — it is safe to commit.
+3. Deploy (free Cloudflare account). Both secrets are stored in Cloudflare, never in the repo — `wrangler secret put` prompts you and you paste the value:
+   ```bash
+   cd tools/claude-proxy
+   npx wrangler deploy
+   npx wrangler secret put ANTHROPIC_API_KEY     # paste your sk-ant-... key
+   npx wrangler secret put DEMO_TOKEN            # a long random string (ASCII recommended)
+   ```
+   `DEMO_TOKEN` is the unguessable token in the demo URL — you invent it; it is not from Anthropic.
+4. Share one link — the URL parameters preseed the settings (use the same token you set above):
+   ```
+   https://<you>.github.io/<repo>/?endpoint=https://diyw-claude-proxy.<account>.workers.dev/t/<DEMO_TOKEN>&model=claude-opus-4-8&lang=en
+   ```
+
+Both sides are HTTPS, so the mixed-content workaround below is not needed for the demo. **Switching models** (e.g. Sonnet vs Opus): ⚙ Settings → Model lists everything from `MODELS`, or hand out links with different `&model=` values. The proxy streams, translates the app's OpenAI-style requests to the Anthropic Messages API, caches the system prompt (≈90% cheaper repeat turns), strips parameters Claude rejects, and forwards the vision-review images — so the visual critique runs on Claude too. After the demo, delete the worker (`npx wrangler delete`) or rotate the key, and the link goes dead.
 
 ### Mixed content (HTTPS site → HTTP LLM)
 
@@ -56,7 +81,11 @@ Built-in debug console: **🐞 button** in the top bar, `Ctrl+Shift+D`, or add `
 ## Files
 
 - `index.html` — layout + A-Frame bootstrap (version from settings)
-- `js/schema.js` — design JSON schema, validation, cut-list grouping, sample bed
+- `js/schema.js` — design JSON schema (parts + plants), validation, cut-list grouping, garden lints, sample bed
+- `js/plantdb.js` — bilingual plant catalog (species data + care texts, EN/DE) the AI designs from
+- `js/blender.js` — client for the optional local Blender bridge
+- `tools/blender_bridge.py` — headless Blender HTTP service (renders, STL/GLB with boolean cutouts)
+- `js/garden.js` — gardening module: sample vegetable garden, species labels, care resolution
 - `js/viewer.js` — A-Frame viewer: orbit camera, picking, explode, prep & assembly modes
 - `js/llm.js` — OpenAI-compatible streaming client + robust JSON extraction (handles `<think>` blocks)
 - `js/prompts.js` — system prompt & message building (design / clarify / chat protocol)

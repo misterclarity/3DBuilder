@@ -16,9 +16,15 @@
   var selected = {};             // partId -> true
   var hovered = null;
   var showJoints = true;
-  var cb = {};                   // callbacks: onSelect(ids), onPartInfo(part|null), onJointInfo(joint|null)
-  var partEls = {}, jointEls = {};
+  var cb = {};                   // callbacks: onSelect(ids), onPartInfo(part|null), onJointInfo(joint|null), onPlantInfo(plant|null)
+  var partEls = {}, jointEls = {}, plantEls = {};
   var dragDist = 0, downPos = null;
+
+  // foliage default colors per growth habit (plant.color overrides the accent)
+  var HABIT_GREEN = {
+    leafy: '#66bb6a', bushy: '#4caf50', vining: '#7cb342', climbing: '#7cb342', root: '#8bc34a',
+    herb: '#81c784', flower: '#66bb6a', shrub: '#388e3c', tree: '#2e7d32', grass: '#9ccc65'
+  };
 
   var JOINT_COLORS = {
     hinge: '#ff9800', screw: '#90a4ae', bolt: '#546e7a', dowel: '#d7a97f', glue: '#eceff1',
@@ -241,15 +247,27 @@
     if (!d) { if (window.Debug) Debug.log('info', 'viewer', 'Design cleared'); return; }
 
     d.parts.forEach(function (p) { partEls[p.id] = makePartEntity(p); });
+    (d.plants || []).forEach(function (p) { plantEls[p.id] = makePlantEntity(p); });
     (d.joints || []).forEach(function (j) { if (j.position) jointEls[j.id] = makeJointEntity(j); });
     applyMode(true);
     fitView();
-    if (window.Debug) Debug.log('ok', 'viewer', 'Design "' + d.meta.name + '" rendered: ' + d.parts.length + ' parts, ' + (d.joints || []).length + ' joints, ' + d.assembly.length + ' steps');
+    if (window.Debug) Debug.log('ok', 'viewer', 'Design "' + d.meta.name + '" rendered: ' + d.parts.length + ' parts, ' + (d.plants || []).length + ' plants, ' + (d.joints || []).length + ' joints, ' + d.assembly.length + ' steps');
+  }
+
+  // Rebuild only the plant entities (e.g. after the plant-style setting changed).
+  function refreshPlants() {
+    if (!design) return;
+    Object.keys(plantEls).forEach(function (id) {
+      if (plantEls[id].parentNode) plantEls[id].parentNode.removeChild(plantEls[id]);
+    });
+    plantEls = {};
+    (design.plants || []).forEach(function (p) { plantEls[p.id] = makePlantEntity(p); });
+    applyMode(true);
   }
 
   function clearRoots() {
     [partsRoot, jointsRoot, labelsRoot, measureRoot].forEach(function (r) { while (r.firstChild) r.removeChild(r.firstChild); });
-    partEls = {}; jointEls = {};
+    partEls = {}; jointEls = {}; plantEls = {};
     measurePt = null;
   }
 
@@ -269,6 +287,7 @@
     // Cutouts: rendered as dark disks slightly proud of both faces (no CSG in A-Frame).
     (p.cutouts || []).forEach(function (co) {
       var h = document.createElement('a-entity');
+      h.classList.add('pickable');   // so clicking the hole disc selects the part (events bubble)
       var th = ((p.dimensions[co.axis] || 10) + 2) * S;
       h.setAttribute('geometry', { primitive: 'cylinder', radius: co.diameter / 2 * S, height: th, segmentsRadial: 28 });
       h.setAttribute('material', { shader: 'flat', color: '#14181c' });
@@ -313,6 +332,174 @@
     return el;
   }
 
+  /* ---------- plants (garden mode) ---------- */
+  // Deterministic pseudo-random in [0,1) from a string id (natural variation).
+  function idRnd(id, salt) {
+    var h = salt || 0;
+    for (var i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+    return (h % 1000) / 1000;
+  }
+
+  function plantStyle() {
+    var s = window.LLM ? LLM.settings().plantStyle : '';
+    return s === 'billboard' ? 'billboard' : 'primitives';
+  }
+
+  // One mesh child of a plant. Standard shader → highlightable via emissive.
+  // The child itself must be .pickable: the raycaster only collects meshes
+  // registered on whitelisted entities (not descendants of an empty group).
+  // Its click/hover events bubble up to the plant root's handlers.
+  function plantMesh(parent, geom, color, pos, scale) {
+    var e = document.createElement('a-entity');
+    e.classList.add('pickable');
+    e.setAttribute('geometry', geom);
+    e.setAttribute('material', { shader: 'standard', color: color, roughness: 0.85, metalness: 0 });
+    e.setAttribute('position', pos.x + ' ' + pos.y + ' ' + pos.z);
+    if (scale) e.setAttribute('scale', scale.x + ' ' + scale.y + ' ' + scale.z);
+    e.dataset.pm = '1';
+    parent.appendChild(e);
+    return e;
+  }
+
+  // Procedural plant shapes by growth habit. All sizes in meters.
+  function buildPlantShape(wrap, p) {
+    var h = Math.max(0.04, p.matureHeight * S);
+    var r = Math.max(0.02, p.matureDiameter * S / 2);
+    var green = HABIT_GREEN[p.habit] || '#4caf50';
+    var accent = p.color || null;
+    var stemCol = '#8d6e63';
+    function sphere(rad) { return { primitive: 'sphere', radius: rad, segmentsWidth: 14, segmentsHeight: 10 }; }
+    function cyl(rad, ht) { return { primitive: 'cylinder', radius: rad, height: ht, segmentsRadial: 10 }; }
+    function cone(rad, ht) { return { primitive: 'cone', radiusBottom: rad, radiusTop: 0.001, height: ht, segmentsRadial: 10 }; }
+
+    switch (p.habit) {
+      case 'leafy':
+        plantMesh(wrap, sphere(r), accent || green, { x: 0, y: h / 2, z: 0 }, { x: 1, y: h / (2 * r), z: 1 });
+        plantMesh(wrap, sphere(r * 0.55), '#dcedc8', { x: 0, y: h * 0.62, z: 0 }, { x: 1, y: h / (2 * r) * 0.7, z: 1 });
+        break;
+      case 'root':
+        plantMesh(wrap, cone(r * 0.55, h), green, { x: 0, y: h / 2, z: 0 });
+        plantMesh(wrap, sphere(r * 0.45), green, { x: 0, y: h * 0.55, z: 0 }, { x: 1, y: 1.4, z: 1 });
+        break;
+      case 'herb':
+        plantMesh(wrap, cyl(r * 0.06, h * 0.4), '#7a9e5f', { x: 0, y: h * 0.2, z: 0 });
+        plantMesh(wrap, sphere(r * 0.55), green, { x: -r * 0.3, y: h * 0.55, z: r * 0.15 });
+        plantMesh(wrap, sphere(r * 0.5), green, { x: r * 0.3, y: h * 0.6, z: -r * 0.1 });
+        plantMesh(wrap, sphere(r * 0.5), accent || green, { x: 0, y: h * 0.78, z: 0 });
+        break;
+      case 'flower':
+        plantMesh(wrap, cyl(Math.max(0.004, r * 0.05), h * 0.75), '#558b2f', { x: 0, y: h * 0.375, z: 0 });
+        plantMesh(wrap, sphere(r * 0.42), green, { x: 0, y: h * 0.28, z: 0 }, { x: 1.4, y: 0.5, z: 1.4 });
+        plantMesh(wrap, sphere(r * 0.38), accent || '#f06292', { x: 0, y: h * 0.88, z: 0 });
+        break;
+      case 'climbing':
+        plantMesh(wrap, cyl(0.008, h), stemCol, { x: 0, y: h / 2, z: 0 });  // stake
+        plantMesh(wrap, sphere(r * 0.5), green, { x: r * 0.15, y: h * 0.3, z: 0 });
+        plantMesh(wrap, sphere(r * 0.45), green, { x: -r * 0.15, y: h * 0.58, z: r * 0.1 });
+        plantMesh(wrap, sphere(r * 0.4), accent || green, { x: 0, y: h * 0.85, z: -r * 0.05 });
+        break;
+      case 'vining':
+        plantMesh(wrap, sphere(r * 0.6), green, { x: -r * 0.5, y: h * 0.4, z: 0 }, { x: 1, y: h / (2 * r), z: 1 });
+        plantMesh(wrap, sphere(r * 0.6), green, { x: r * 0.5, y: h * 0.45, z: r * 0.15 }, { x: 1, y: h / (2 * r), z: 1 });
+        plantMesh(wrap, sphere(r * 0.55), accent || green, { x: 0, y: h * 0.55, z: -r * 0.2 });
+        break;
+      case 'tree':
+        plantMesh(wrap, cyl(Math.max(0.012, r * 0.09), h * 0.45), '#795548', { x: 0, y: h * 0.225, z: 0 });
+        plantMesh(wrap, sphere(r), green, { x: 0, y: h * 0.7, z: 0 }, { x: 1, y: (h * 0.6) / (2 * r), z: 1 });
+        if (accent) {  // fruit tree: colored fruit dots on the canopy
+          [[0.6, 0.72, 0.5], [-0.65, 0.62, 0.25], [0.1, 0.8, -0.6], [-0.3, 0.7, 0.65]].forEach(function (o) {
+            plantMesh(wrap, sphere(Math.min(0.08, r * 0.12)), accent, { x: r * o[0], y: h * o[1], z: r * o[2] });
+          });
+        }
+        break;
+      case 'shrub':
+        plantMesh(wrap, cyl(Math.max(0.008, r * 0.07), h * 0.25), '#795548', { x: 0, y: h * 0.125, z: 0 });
+        plantMesh(wrap, sphere(r), accent || green, { x: 0, y: h * 0.55, z: 0 }, { x: 1, y: (h * 0.9) / (2 * r), z: 1 });
+        break;
+      case 'grass':
+        plantMesh(wrap, cone(r * 0.5, h), green, { x: 0, y: h / 2, z: 0 });
+        plantMesh(wrap, cone(r * 0.35, h * 0.8), '#aed581', { x: r * 0.25, y: h * 0.4, z: r * 0.1 });
+        break;
+      default: // bushy
+        plantMesh(wrap, cyl(Math.max(0.006, r * 0.06), h * 0.5), '#7a9e5f', { x: 0, y: h * 0.25, z: 0 });
+        plantMesh(wrap, sphere(r * 0.9), green, { x: 0, y: h * 0.6, z: 0 }, { x: 1, y: (h * 0.75) / (2 * r * 0.9), z: 1 });
+        if (accent) {
+          [[0.5, 0.5, 0.55], [-0.55, 0.62, 0.2], [0.15, 0.72, -0.55]].forEach(function (o) {
+            plantMesh(wrap, sphere(Math.min(0.05, r * 0.22)), accent, { x: r * o[0], y: h * o[1], z: r * o[2] });
+          });
+        }
+    }
+  }
+
+  // Camera-facing sprite with a species emoji (billboard style).
+  var spriteCache = {};
+  function spriteTexture(emoji) {
+    if (spriteCache[emoji]) return spriteCache[emoji];
+    var c = document.createElement('canvas');
+    c.width = 128; c.height = 128;
+    var ctx = c.getContext('2d');
+    ctx.beginPath(); ctx.arc(64, 64, 61, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(27,58,30,0.82)'; ctx.fill();
+    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(139,195,74,0.9)'; ctx.stroke();
+    ctx.font = '78px "Segoe UI Emoji", "Apple Color Emoji", serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(emoji, 64, 70);
+    var url = c.toDataURL('image/png');
+    spriteCache[emoji] = url;
+    return url;
+  }
+
+  function makePlantEntity(p) {
+    var el = document.createElement('a-entity');
+    el.classList.add('pickable');
+    el.dataset.plantId = p.id;
+    el.setAttribute('position', vec(p.position));
+
+    var h = Math.max(0.04, p.matureHeight * S);
+    if (plantStyle() === 'billboard') {
+      var side = Math.max(p.matureDiameter * S, h * 0.7);
+      var b = document.createElement('a-entity');
+      b.classList.add('pickable');   // sprite mesh lives on this child, see plantMesh note
+      b.setAttribute('geometry', { primitive: 'plane', width: side, height: side });
+      b.setAttribute('material', {
+        shader: 'flat', transparent: true,
+        src: spriteTexture(window.Garden ? Garden.emojiFor(p.species, p.habit) : '🌱')
+      });
+      b.setAttribute('position', '0 ' + (h / 2) + ' 0');
+      b.setAttribute('billboard', '');
+      b.dataset.pm = '1'; b.dataset.flat = '1';
+      el.appendChild(b);
+    } else {
+      // slight per-plant rotation/scale variation so rows look organic
+      var wrap = document.createElement('a-entity');
+      wrap.setAttribute('rotation', '0 ' + Math.round(idRnd(p.id) * 360) + ' 0');
+      var sc = 0.92 + idRnd(p.id, 7) * 0.16;
+      wrap.setAttribute('scale', sc + ' ' + sc + ' ' + sc);
+      buildPlantShape(wrap, p);
+      el.appendChild(wrap);
+    }
+
+    // name label (always on)
+    var label = document.createElement('a-entity');
+    label.setAttribute('billboard', '');
+    label.setAttribute('position', '0 ' + (h + 0.07) + ' 0');
+    label.setAttribute('text', { value: p.name, align: 'center', color: '#dcedc8', width: 1.1, wrapCount: 18 });
+    el.appendChild(label);
+
+    el.addEventListener('mouseenter', function () { hovered = p.id; refreshVisual(p.id); if (cb.onHover) cb.onHover(p.id); });
+    el.addEventListener('mouseleave', function () { if (hovered === p.id) hovered = null; refreshVisual(p.id); if (cb.onHover) cb.onHover(null); });
+    el.addEventListener('click', function (evt) {
+      if (dragDist >= 6) return;
+      clickConsumed = true;
+      if (measureMode) { addMeasurePoint(evt.detail && evt.detail.intersection); return; }
+      var multi = evt.detail && evt.detail.mouseEvent && (evt.detail.mouseEvent.ctrlKey || evt.detail.mouseEvent.metaKey);
+      selectPart(p.id, multi);
+    });
+
+    partsRoot.appendChild(el);
+    return el;
+  }
+
   function vec(p) { return (p.x * S) + ' ' + (p.y * S) + ' ' + (p.z * S); }
 
   function setTransform(el, posMM, rotDeg, animate) {
@@ -341,7 +528,11 @@
     refreshVisual(id);
     var ids = Object.keys(selected);
     if (cb.onSelect) cb.onSelect(ids);
-    if (cb.onPartInfo) cb.onPartInfo(ids.length ? design.parts.find(function (p) { return p.id === ids[ids.length - 1]; }) : null);
+    var last = ids.length ? ids[ids.length - 1] : null;
+    var part = last && design.parts.find(function (p) { return p.id === last; });
+    var plant = !part && last && (design.plants || []).find(function (p) { return p.id === last; });
+    if (plant) { if (cb.onPlantInfo) cb.onPlantInfo(plant); }
+    else if (cb.onPartInfo) cb.onPartInfo(part || null);
   }
 
   function clearSelection() {
@@ -351,11 +542,30 @@
 
   function setSelection(ids) {
     clearSelection();
-    (ids || []).forEach(function (id) { if (partEls[id]) { selected[id] = true; refreshVisual(id); } });
+    (ids || []).forEach(function (id) { if (partEls[id] || plantEls[id]) { selected[id] = true; refreshVisual(id); } });
     if (cb.onSelect) cb.onSelect(Object.keys(selected));
   }
 
+  // Highlight state on a plant: emissive on standard-shader meshes, tint on flat sprites.
+  function refreshPlantVisual(id) {
+    var el = plantEls[id];
+    if (!el || !design) return;
+    var isCurrentStep = mode === 'assembly' && partStep(id) === asmStep;
+    var em = '#000000', emi = 0, tint = '#ffffff';
+    if (selected[id]) { em = '#1e88e5'; emi = 0.45; tint = '#9ecbff'; }
+    else if (hovered === id) { em = '#ffffff'; emi = 0.18; tint = '#d4e9ff'; }
+    else if (isCurrentStep) { em = '#ff8f00'; emi = 0.35; tint = '#ffd180'; }
+    el.querySelectorAll('[data-pm]').forEach(function (m) {
+      if (m.dataset.flat) m.setAttribute('material', 'color', tint);
+      else {
+        m.setAttribute('material', 'emissive', em);
+        m.setAttribute('material', 'emissiveIntensity', emi);
+      }
+    });
+  }
+
   function refreshVisual(id) {
+    if (plantEls[id]) { refreshPlantVisual(id); return; }
     var el = partEls[id];
     if (!el || !design) return;
     var p = design.parts.find(function (q) { return q.id === id; });
@@ -426,8 +636,17 @@
     if (mode === 'prep') layoutPrep(instant);
     else if (mode === 'assembly') { layoutModel(instant); applyAssemblyVisibility(); }
     else { layoutModel(instant); showAllParts(); }
+    // plants: hidden on the cut-prep workbench, per-step in assembly, all in model
+    (design.plants || []).forEach(function (p) {
+      var el = plantEls[p.id];
+      if (!el) return;
+      if (mode === 'prep') el.setAttribute('visible', false);
+      else if (mode === 'assembly') el.setAttribute('visible', partStep(p.id) <= asmStep);
+      else el.setAttribute('visible', true);
+    });
     jointsRoot.setAttribute('visible', showJoints && mode !== 'prep');
     design.parts.forEach(function (p) { refreshVisual(p.id); });
+    (design.plants || []).forEach(function (p) { refreshVisual(p.id); });
   }
 
   function layoutModel(instant) {
@@ -561,6 +780,7 @@
     asmStep = Math.min(design.assembly.length, Math.max(1, n));
     applyAssemblyVisibility();
     design.parts.forEach(function (p) { refreshVisual(p.id); });
+    (design.plants || []).forEach(function (p) { refreshVisual(p.id); });
     if (mode === 'assembly') animateStepIn();
     return design.assembly[asmStep - 1];
   }
@@ -570,8 +790,9 @@
     var cur = design.assembly[asmStep - 1];
     if (!cur) return;
     cur.parts.forEach(function (id) {
-      var p = design.parts.find(function (q) { return q.id === id; });
-      var el = partEls[id];
+      var p = design.parts.find(function (q) { return q.id === id; }) ||
+              (design.plants || []).find(function (q) { return q.id === id; });
+      var el = partEls[id] || plantEls[id];
       if (!p || !el) return;
       el.removeAttribute('animation__pos');
       el.setAttribute('position', vec({ x: p.position.x, y: p.position.y + 250, z: p.position.z }));
@@ -583,6 +804,9 @@
     design.parts.forEach(function (p) {
       var st = partStep(p.id);
       partEls[p.id].setAttribute('visible', st <= asmStep);
+    });
+    (design.plants || []).forEach(function (p) {
+      if (plantEls[p.id]) plantEls[p.id].setAttribute('visible', partStep(p.id) <= asmStep);
     });
     (design.joints || []).forEach(function (j) {
       if (!jointEls[j.id]) return;
@@ -599,7 +823,7 @@
 
   // ---------- misc ----------
   function fitView() {
-    if (!design || !design.parts.length || !camEl) return;
+    if (!design || !camEl || (!design.parts.length && !(design.plants || []).length)) return;
     var min = { x: 1e9, y: 1e9, z: 1e9 }, max = { x: -1e9, y: -1e9, z: -1e9 };
     design.parts.forEach(function (p) {
       var half = p.shape === 'cylinder'
@@ -609,6 +833,12 @@
         min[a] = Math.min(min[a], p.position[a] - half[a]);
         max[a] = Math.max(max[a], p.position[a] + half[a]);
       });
+    });
+    (design.plants || []).forEach(function (p) {
+      var half = { x: p.matureDiameter / 2, z: p.matureDiameter / 2 };
+      min.x = Math.min(min.x, p.position.x - half.x); max.x = Math.max(max.x, p.position.x + half.x);
+      min.z = Math.min(min.z, p.position.z - half.z); max.z = Math.max(max.z, p.position.z + half.z);
+      min.y = Math.min(min.y, p.position.y); max.y = Math.max(max.y, p.position.y + p.matureHeight);
     });
     var size = Math.max(max.x - min.x, max.y - min.y, max.z - min.z) * S;
     var c = new THREE.Vector3((min.x + max.x) / 2 * S, (min.y + max.y) / 2 * S, (min.z + max.z) / 2 * S);
@@ -658,18 +888,28 @@
   }
 
   function focusPart(id) {
-    var p = design && design.parts.find(function (q) { return q.id === id; });
-    if (!p || !camEl.components['orbit-cam']) return;
-    var el = partEls[id];
+    if (!camEl.components['orbit-cam'] || !design) return;
+    var p = design.parts.find(function (q) { return q.id === id; });
+    var pl = !p && (design.plants || []).find(function (q) { return q.id === id; });
+    var el = partEls[id] || plantEls[id];
+    if ((!p && !pl) || !el) return;
     var wp = new THREE.Vector3();
     el.object3D.getWorldPosition(wp);
-    var size = p.shape === 'cylinder' ? p.dimensions.height : Math.max(p.dimensions.x, p.dimensions.y, p.dimensions.z);
+    var size = p
+      ? (p.shape === 'cylinder' ? p.dimensions.height : Math.max(p.dimensions.x, p.dimensions.y, p.dimensions.z))
+      : Math.max(pl.matureHeight, pl.matureDiameter);
     camEl.components['orbit-cam'].setView(wp, Math.max(0.6, size * S * 2.4));
   }
 
-  // Re-apply one part's transform after external position/rotation changes (nudge tool).
+  // Re-apply one part's/plant's transform after external position changes (nudge tool).
   function updatePartTransform(id) {
-    var p = design && design.parts.find(function (q) { return q.id === id; });
+    if (!design) return;
+    var pl = (design.plants || []).find(function (q) { return q.id === id; });
+    if (pl && plantEls[id]) {
+      plantEls[id].setAttribute('animation__pos', { property: 'position', to: vec(pl.position), dur: 300, easing: 'easeInOutQuad' });
+      return;
+    }
+    var p = design.parts.find(function (q) { return q.id === id; });
     var el = partEls[id];
     if (!p || !el) return;
     if (mode === 'prep') layoutPrep(false);
@@ -691,6 +931,7 @@
     clearSelection: clearSelection,
     getSelection: function () { return Object.keys(selected); },
     refreshMaterials: refreshMaterials,
+    refreshPlants: refreshPlants,
     fitView: fitView,
     focusPart: focusPart,
     screenshot: screenshot,

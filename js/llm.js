@@ -2,6 +2,23 @@
 (function () {
   'use strict';
 
+  /* Demo-link bootstrap: ?endpoint=…&model=…&lang=… preseed the settings so a
+   * single shared URL works with zero setup (e.g. pointing at the Claude proxy:
+   * ?endpoint=https://….workers.dev/t/TOKEN&model=claude-opus-4-8). */
+  try {
+    var q = new URLSearchParams(location.search);
+    if (q.get('endpoint') || q.get('model') || q.get('lang')) {
+      var boot = {};
+      try { boot = JSON.parse(localStorage.getItem('diyw_settings') || '{}'); } catch (e) { boot = {}; }
+      if (q.get('endpoint')) boot.endpoint = q.get('endpoint');
+      if (q.get('model') !== null) boot.model = q.get('model');
+      if (q.get('lang')) boot.language = q.get('lang');
+      localStorage.setItem('diyw_settings', JSON.stringify(boot));
+      if (q.get('lang') && window.I18n) I18n.setLang(q.get('lang'));
+      if (window.Debug) Debug.log('info', 'llm', 'Settings preseeded from URL parameters');
+    }
+  } catch (e) { /* very old browser — ignore */ }
+
   var DEFAULTS = {
     endpoint: 'http://100.119.213.123:8080/v1',
     model: '', // '' = auto: use whatever model the server reports on /models
@@ -13,7 +30,10 @@
     twoPass: true,      // plan first, then generate geometry (new designs)
     autoRepair: true,   // feed geometry lint findings back to the AI automatically
     visionReview: false,  // send renders to a vision model for visual critique
-    visionEndpoint: ''    // separate endpoint for the vision model ('' = main endpoint)
+    visionEndpoint: '',   // separate endpoint for the vision model ('' = main endpoint)
+    plantStyle: 'primitives', // garden mode: 'primitives' (procedural 3D shapes) | 'billboard' (flat icons)
+    blenderBridge: false, // optional local Blender service (photoreal renders, STL/GLB with real cutouts)
+    blenderURL: 'http://127.0.0.1:8800'
   };
 
   function settings() {

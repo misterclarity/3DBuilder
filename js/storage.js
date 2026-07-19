@@ -44,7 +44,8 @@
       all.sort(function (a, b) { return b.updatedAt - a.updatedAt; });
       // Return light records (no full design) for listing.
       return all.map(function (r) {
-        return { id: r.id, name: r.name, updatedAt: r.updatedAt, thumbnail: r.thumbnail, partCount: r.design && r.design.parts ? r.design.parts.length : 0 };
+        return { id: r.id, name: r.name, updatedAt: r.updatedAt, thumbnail: r.thumbnail,
+          partCount: r.design ? (r.design.parts || []).length + (r.design.plants || []).length : 0 };
       });
     });
   }

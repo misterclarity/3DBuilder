@@ -1,0 +1,11 @@
+# Python bytecode cache (Blender bridge)
+__pycache__/
+*.pyc
+
+# Cloudflare Wrangler local state
+tools/claude-proxy/.wrangler/
+node_modules/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db

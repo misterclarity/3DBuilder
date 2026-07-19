@@ -11,22 +11,25 @@
 <header id="topbar">
   <div class="brand">🪚 DIY Workshop <span class="sub" data-i18n="app.subtitle">AI 3D design assistant</span></div>
   <div class="topbtns">
-    <button id="btnNew" data-i18n="btn.new">New</button>
-    <button id="btnSave" data-i18n="btn.save">Save</button>
-    <button id="btnLibrary" data-i18n="btn.library">Library</button>
-    <button id="btnInventory" data-i18n="btn.inventory" title="Standard parts & cuts the AI designs from">📦 Stock</button>
-    <button id="btnExport" data-i18n="btn.export">Export</button>
-    <button id="btnObj" data-i18n="btn.obj" title="Export 3D model (.obj + .mtl)">OBJ</button>
-    <button id="btnPdf" data-i18n="btn.pdf" title="Export plans as PDF (2D views + cut list + assembly)">PDF</button>
-    <button id="btnImport" data-i18n="btn.import">Import</button>
+    <button id="btnNew" data-i18n="btn.new" data-i18n-title="tip.new">New</button>
+    <button id="btnMode" data-i18n-title="btn.mode.title">🌱 Garden</button>
+    <button id="btnSave" data-i18n="btn.save" data-i18n-title="tip.saveBtn">Save</button>
+    <button id="btnLibrary" data-i18n="btn.library" data-i18n-title="tip.library">Library</button>
+    <button id="btnInventory" data-i18n="btn.inventory" data-i18n-title="tip.inventory">📦 Stock</button>
+    <button id="btnExport" data-i18n="btn.export" data-i18n-title="tip.export">Export</button>
+    <button id="btnObj" data-i18n="btn.obj" data-i18n-title="tip.obj">OBJ</button>
+    <button id="btnStl" class="hidden" data-i18n-title="btn.stlTitle">STL</button>
+    <button id="btnGlb" class="hidden" data-i18n-title="btn.glbTitle">GLB</button>
+    <button id="btnPdf" data-i18n="btn.pdf" data-i18n-title="tip.pdf">PDF</button>
+    <button id="btnImport" data-i18n="btn.import" data-i18n-title="tip.import">Import</button>
     <input type="file" id="fileImport" accept=".json,application/json" hidden>
-    <button id="btnSettings" data-i18n="btn.settings">⚙ Settings</button>
-    <select id="langSel" title="Language / Sprache">
+    <button id="btnSettings" data-i18n="btn.settings" data-i18n-title="tip.settings">⚙ Settings</button>
+    <select id="langSel" data-i18n-title="tip.lang">
       <option value="en">EN</option>
       <option value="de">DE</option>
     </select>
-    <button id="btnDebug" title="Debug console (Ctrl+Shift+D)">🐞</button>
-    <span id="connDot" class="dot" title="AI connection status"></span>
+    <button id="btnDebug" data-i18n-title="tip.debug">🐞</button>
+    <span id="connDot" class="dot" data-i18n-title="tip.conn"></span>
   </div>
 </header>
 
@@ -34,12 +37,12 @@
   <!-- Chat panel -->
   <section id="chatPanel">
     <div id="chatLog"></div>
-    <div id="selChip" class="hidden"><span id="selChipText"></span><button id="selChipClear" title="Clear selection">✕</button></div>
+    <div id="selChip" class="hidden"><span id="selChipText"></span><button id="selChipClear" data-i18n-title="tip.clearSel">✕</button></div>
     <div id="chatInputRow">
-      <textarea id="chatInput" rows="3" data-i18n-ph="chat.placeholder" placeholder="Describe what you want to build, or ask for changes…"></textarea>
+      <textarea id="chatInput" rows="3" data-i18n-ph="chat.placeholder" data-i18n-title="tip.chatInput" placeholder="Describe what you want to build, or ask for changes…"></textarea>
       <div class="chatBtns">
-        <button id="btnSend" class="primary" data-i18n="btn.send">Send</button>
-        <button id="btnStop" class="hidden" data-i18n="btn.stop">Stop</button>
+        <button id="btnSend" class="primary" data-i18n="btn.send" data-i18n-title="tip.send">Send</button>
+        <button id="btnStop" class="hidden" data-i18n="btn.stop" data-i18n-title="tip.stop">Stop</button>
       </div>
     </div>
   </section>
@@ -48,14 +51,15 @@
   <section id="rightPane">
     <div id="viewerToolbar">
       <div class="modeGroup">
-        <button class="modeBtn active" data-mode="model" data-i18n="mode.model">Model</button>
-        <button class="modeBtn" data-mode="prep" data-i18n="mode.prep">Cut &amp; Prep</button>
-        <button class="modeBtn" data-mode="assembly" data-i18n="mode.assembly">Assembly</button>
+        <button class="modeBtn active" data-mode="model" data-i18n="mode.model" data-i18n-title="tip.modeModel">Model</button>
+        <button class="modeBtn" data-mode="prep" data-i18n="mode.prep" data-i18n-title="tip.modePrep">Cut &amp; Prep</button>
+        <button class="modeBtn" data-mode="assembly" data-i18n="mode.assembly" data-i18n-title="tip.modeAssembly">Assembly</button>
       </div>
-      <label class="explodeWrap" id="explodeWrap"><span data-i18n="viewer.explode">Explode</span> <input type="range" id="explodeSlider" min="0" max="100" value="0"></label>
-      <label class="chk"><input type="checkbox" id="chkJoints" checked> <span data-i18n="viewer.joints">Joints</span></label>
-      <button id="btnFit" data-i18n="viewer.fit">⤢ Fit</button>
-      <button id="btnMeasure" data-i18n="viewer.measure">📏 Measure</button>
+      <label class="explodeWrap" id="explodeWrap" data-i18n-title="tip.explode"><span data-i18n="viewer.explode">Explode</span> <input type="range" id="explodeSlider" min="0" max="100" value="0"></label>
+      <label class="chk" data-i18n-title="tip.joints"><input type="checkbox" id="chkJoints" checked> <span data-i18n="viewer.joints">Joints</span></label>
+      <button id="btnFit" data-i18n="viewer.fit" data-i18n-title="tip.fit">⤢ Fit</button>
+      <button id="btnMeasure" data-i18n="viewer.measure" data-i18n-title="tip.measure">📏 Measure</button>
+      <button id="btnRender" class="hidden" data-i18n="btn.render" data-i18n-title="btn.renderTitle">📷 Render</button>
       <button id="btnUndo" data-i18n-title="btn.undo" disabled>↶</button>
       <button id="btnRedo" data-i18n-title="btn.redo" disabled>↷</button>
       <span class="hint" data-i18n="viewer.hint">drag = orbit · wheel = zoom · right-drag = pan · click part = info · Ctrl+click = multi-select</span>
@@ -66,46 +70,50 @@
 
       <!-- floating part info card -->
       <aside id="partCard" class="hidden">
-        <div class="cardHead"><b id="pcName"></b><button id="pcClose">✕</button></div>
+        <div class="cardHead"><b id="pcName"></b><button id="pcClose" data-i18n-title="tip.close">✕</button></div>
         <div id="pcBody"></div>
         <div class="cardActions">
-          <input type="color" id="pcColor" title="Part color">
-          <select id="pcFinish">
+          <input type="color" id="pcColor" data-i18n-title="tip.pcColor">
+          <select id="pcFinish" data-i18n-title="tip.pcFinish">
             <option value="raw" data-i18n="fin.raw">Raw</option><option value="painted" data-i18n="fin.painted">Painted</option>
             <option value="stained" data-i18n="fin.stained">Stained</option><option value="varnished" data-i18n="fin.varnished">Varnished</option>
           </select>
-          <label class="mini"><span data-i18n="pc.shine">Shine</span> <input type="range" id="pcShine" min="0" max="100" value="15"></label>
-          <button id="pcApply" class="primary" data-i18n="btn.apply">Apply</button>
-          <button id="pcFocus" data-i18n="btn.focus">Focus</button>
+          <label class="mini" id="pcShineWrap" data-i18n-title="tip.pcShine"><span data-i18n="pc.shine">Shine</span> <input type="range" id="pcShine" min="0" max="100" value="15"></label>
+          <button id="pcApply" class="primary" data-i18n="btn.apply" data-i18n-title="tip.pcApply">Apply</button>
+          <button id="pcFocus" data-i18n="btn.focus" data-i18n-title="tip.pcFocus">Focus</button>
         </div>
         <div class="cardActions" id="pcMove">
           <span class="mini" data-i18n="pc.move">Move (mm)</span>
-          <select id="pcStep"><option>1</option><option selected>5</option><option>25</option><option>100</option></select>
-          <button data-axis="x" data-dir="-1">X−</button><button data-axis="x" data-dir="1">X+</button>
-          <button data-axis="y" data-dir="-1">Y−</button><button data-axis="y" data-dir="1">Y+</button>
-          <button data-axis="z" data-dir="-1">Z−</button><button data-axis="z" data-dir="1">Z+</button>
+          <select id="pcStep" data-i18n-title="tip.pcStep"><option>1</option><option selected>5</option><option>25</option><option>100</option></select>
+          <button data-axis="x" data-dir="-1" data-i18n-title="tip.move">X−</button><button data-axis="x" data-dir="1" data-i18n-title="tip.move">X+</button>
+          <button data-axis="y" data-dir="-1" data-i18n-title="tip.move">Y−</button><button data-axis="y" data-dir="1" data-i18n-title="tip.move">Y+</button>
+          <button data-axis="z" data-dir="-1" data-i18n-title="tip.move">Z−</button><button data-axis="z" data-dir="1" data-i18n-title="tip.move">Z+</button>
         </div>
       </aside>
 
       <!-- assembly step overlay -->
       <div id="asmBar" class="hidden">
-        <button id="asmPrev">◀</button>
+        <button id="asmPrev" data-i18n-title="tip.prevStep">◀</button>
         <div id="asmInfo"><b id="asmTitle"></b><span id="asmText"></span></div>
-        <button id="asmNext">▶</button>
+        <button id="asmNext" data-i18n-title="tip.nextStep">▶</button>
       </div>
     </div>
 
     <!-- bottom tabs -->
     <div id="tabs">
       <div class="tabBtns">
-        <button class="tabBtn active" data-tab="cutlist" data-i18n="tab.cutlist">Cut list</button>
-        <button class="tabBtn" data-tab="steps" data-i18n="tab.steps">Assembly steps</button>
-        <button class="tabBtn" data-tab="finishing" data-i18n="tab.finishing">Finishing</button>
-        <button id="btnPrint" class="right" data-i18n="btn.print">🖨 Print</button>
+        <button class="tabBtn active" data-tab="cutlist" data-i18n="tab.cutlist" data-i18n-title="tip.tabCut">Cut list</button>
+        <button class="tabBtn" data-tab="steps" data-i18n="tab.steps" data-i18n-title="tip.tabSteps">Assembly steps</button>
+        <button class="tabBtn" data-tab="finishing" data-i18n="tab.finishing" data-i18n-title="tip.tabFin">Finishing</button>
+        <button class="tabBtn gardenTab hidden" data-tab="plants" data-i18n="tab.plants" data-i18n-title="tip.tabPlants">Plants</button>
+        <button class="tabBtn gardenTab hidden" data-tab="care" data-i18n="tab.care" data-i18n-title="tip.tabCare">Plant care</button>
+        <button id="btnPrint" class="right" data-i18n="btn.print" data-i18n-title="tip.print">🖨 Print</button>
       </div>
       <div id="tab-cutlist" class="tabBody active"></div>
       <div id="tab-steps" class="tabBody"></div>
       <div id="tab-finishing" class="tabBody"></div>
+      <div id="tab-plants" class="tabBody"></div>
+      <div id="tab-care" class="tabBody"></div>
     </div>
   </section>
 </main>
@@ -114,20 +122,20 @@
 <div id="settingsModal" class="modal hidden">
   <div class="modalBox">
     <h2 data-i18n="set.title">Settings</h2>
-    <label><span data-i18n="set.endpoint">AI endpoint (OpenAI-compatible base URL)</span>
+    <label data-i18n-title="tip.setEndpoint"><span data-i18n="set.endpoint">AI endpoint (OpenAI-compatible base URL)</span>
       <input id="setEndpoint" type="text" placeholder="http://100.119.213.123:8080/v1">
     </label>
-    <label><span data-i18n="set.model">Model</span>
+    <label data-i18n-title="tip.setModel"><span data-i18n="set.model">Model</span>
       <select id="setModel">
         <option value="" data-i18n="set.modelAuto">Auto — use the model the server is serving</option>
       </select>
     </label>
     <div class="row2">
-      <label><span data-i18n="set.temp">Temperature</span> <input id="setTemp" type="number" step="0.1" min="0" max="2"></label>
-      <label><span data-i18n="set.maxtok">Max tokens</span> <input id="setMaxTok" type="number" step="512" min="1024"></label>
+      <label data-i18n-title="tip.setTemp"><span data-i18n="set.temp">Temperature</span> <input id="setTemp" type="number" step="0.1" min="0" max="2"></label>
+      <label data-i18n-title="tip.setMaxTok"><span data-i18n="set.maxtok">Max tokens</span> <input id="setMaxTok" type="number" step="512" min="1024"></label>
     </div>
     <small data-i18n="set.llmNote">Sent with each request — they override the llama.cpp/server defaults. Leave empty to use the server's settings.</small>
-    <label><span data-i18n="set.strict">Strict JSON output (response_format json_schema)</span>
+    <label data-i18n-title="tip.setStrict"><span data-i18n="set.strict">Strict JSON output (response_format json_schema)</span>
       <select id="setStrict">
         <option value="auto" data-i18n="set.strictAuto">Auto — try it, fall back if the server rejects it</option>
         <option value="on" data-i18n="set.strictOn">On — always send the schema</option>
@@ -135,31 +143,48 @@
       </select>
     </label>
     <small data-i18n="set.strictNote">Guarantees valid JSON via a server-side grammar (llama.cpp). May suppress the model's thinking phase — turn Off if design quality drops.</small>
-    <label class="chkline"><input type="checkbox" id="setTwoPass"> <span data-i18n="set.twopass">Two-stage design: plan first (better quality, slower)</span></label>
-    <label class="chkline"><input type="checkbox" id="setRepair"> <span data-i18n="set.repair">Auto-fix geometry problems (extra AI rounds)</span></label>
-    <label class="chkline"><input type="checkbox" id="setVision"> <span data-i18n="set.vision">AI visual review after each design (needs a vision-capable model)</span></label>
-    <label><span data-i18n="set.visionEP">Vision model endpoint (empty = main endpoint)</span>
+    <label class="chkline" data-i18n-title="tip.setTwoPass"><input type="checkbox" id="setTwoPass"> <span data-i18n="set.twopass">Two-stage design: plan first (better quality, slower)</span></label>
+    <label class="chkline" data-i18n-title="tip.setRepair"><input type="checkbox" id="setRepair"> <span data-i18n="set.repair">Auto-fix geometry problems (extra AI rounds)</span></label>
+    <label class="chkline" data-i18n-title="tip.setVision"><input type="checkbox" id="setVision"> <span data-i18n="set.vision">AI visual review after each design (needs a vision-capable model)</span></label>
+    <label data-i18n-title="tip.setVisionEP"><span data-i18n="set.visionEP">Vision model endpoint (empty = main endpoint)</span>
       <input id="setVisionEP" type="text" placeholder="http://127.0.0.1:8081/v1">
     </label>
     <div class="row2">
-      <label><span data-i18n="set.aframe">A-Frame version</span>
+      <label data-i18n-title="tip.setAframe"><span data-i18n="set.aframe">A-Frame version</span>
         <input id="setAframe" type="text" placeholder="1.8.0">
       </label>
-      <label><span data-i18n="set.lang">Language</span>
+      <label data-i18n-title="tip.lang"><span data-i18n="set.lang">Language</span>
         <select id="setLang">
           <option value="en">English</option>
           <option value="de">Deutsch</option>
         </select>
       </label>
     </div>
+    <label data-i18n-title="tip.setPlantStyle"><span data-i18n="set.plantStyle">Plant display (garden mode)</span>
+      <select id="setPlantStyle">
+        <option value="primitives" data-i18n="set.plantPrimitives">3D shapes — procedural, with name labels</option>
+        <option value="billboard" data-i18n="set.plantBillboard">Flat icons — camera-facing billboards</option>
+      </select>
+    </label>
+    <label class="chkline" data-i18n-title="tip.setBlender"><input type="checkbox" id="setBlender"> <span data-i18n="set.blender">Blender bridge — photoreal renders, STL/GLB export with real cutouts, better AI vision reviews</span></label>
+    <div id="blenderOpts" class="hidden">
+      <label data-i18n-title="tip.setBlenderURL"><span data-i18n="set.blenderURL">Blender bridge URL</span>
+        <input id="setBlenderURL" type="text" placeholder="http://127.0.0.1:8800">
+      </label>
+      <div class="noteBox" data-i18n-html="set.blenderNote"></div>
+      <div class="modalBtns" style="margin-bottom:10px">
+        <button id="setBlenderTest" data-i18n="set.test" data-i18n-title="tip.testConn">Test connection</button>
+        <span id="setBlenderResult" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+    </div>
     <small data-i18n-html="set.aframeNote">Loaded from <code>aframe.io/releases/&lt;version&gt;/aframe.min.js</code>.</small>
     <div class="noteBox" data-i18n-html="set.mixed"></div>
     <div class="modalBtns">
-      <button id="setTest" data-i18n="set.test">Test connection</button>
+      <button id="setTest" data-i18n="set.test" data-i18n-title="tip.testConn">Test connection</button>
       <span id="setTestResult"></span>
       <span class="spacer"></span>
-      <button id="setCancel" data-i18n="btn.cancel">Cancel</button>
-      <button id="setSaveBtn" class="primary" data-i18n="btn.save">Save</button>
+      <button id="setCancel" data-i18n="btn.cancel" data-i18n-title="tip.cancel">Cancel</button>
+      <button id="setSaveBtn" class="primary" data-i18n="btn.save" data-i18n-title="tip.saveSettings">Save</button>
     </div>
   </div>
 </div>
@@ -171,15 +196,21 @@
     <small data-i18n="inv.hint">Standard parts and cuts the AI designs from first. P = assembly priority (1 = build first), C = complexity (1 = easy). Edit freely — saved in your browser.</small>
     <h3 data-i18n="inv.parts">Parts</h3>
     <div class="invWrap"><table class="cut" id="invParts"></table></div>
-    <button id="invAddPart" data-i18n="inv.addPart">+ Add part</button>
+    <button id="invAddPart" data-i18n="inv.addPart" data-i18n-title="tip.invAddPart">+ Add part</button>
     <h3 data-i18n="inv.cuts">Cuts &amp; operations</h3>
     <div class="invWrap"><table class="cut" id="invCuts"></table></div>
-    <button id="invAddCut" data-i18n="inv.addCut">+ Add cut</button>
+    <button id="invAddCut" data-i18n="inv.addCut" data-i18n-title="tip.invAddCut">+ Add cut</button>
+    <h3 class="gardenOnly hidden" data-i18n="inv.plants">Plant catalog</h3>
+    <small class="gardenOnly hidden" data-i18n="inv.plantsHint">Bilingual — the AI designs from these species first. Edit freely (saved in your browser); 📝 opens the care texts (EN + DE).</small>
+    <input id="invPlantFilter" class="gardenOnly hidden" type="text" data-i18n-ph="inv.filter" data-i18n-title="tip.invFilter" placeholder="Filter plants…" style="width:100%;margin:6px 0">
+    <div class="invWrap gardenOnly hidden" style="max-height:300px"><table class="cut" id="invPlants"></table></div>
+    <button id="invAddPlant" class="gardenOnly hidden" data-i18n="inv.addPlant" data-i18n-title="tip.invAddPlant">+ Add plant</button>
     <div class="modalBtns">
-      <button id="invReset" data-i18n="inv.reset">Reset to defaults</button>
+      <button id="invReset" data-i18n="inv.reset" data-i18n-title="tip.invReset">Reset to defaults</button>
+      <button id="invPlantReset" class="gardenOnly hidden" data-i18n="inv.plantReset" data-i18n-title="tip.invPlantReset">Reset plants</button>
       <span class="spacer"></span>
-      <button id="invCancel" data-i18n="btn.cancel">Cancel</button>
-      <button id="invSave" class="primary" data-i18n="btn.save">Save</button>
+      <button id="invCancel" data-i18n="btn.cancel" data-i18n-title="tip.cancel">Cancel</button>
+      <button id="invSave" class="primary" data-i18n="btn.save" data-i18n-title="tip.invSave">Save</button>
     </div>
   </div>
 </div>
@@ -189,7 +220,7 @@
   <div class="modalBox">
     <h2 data-i18n="lib.title">Design library</h2>
     <div id="libList"></div>
-    <div class="modalBtns"><span class="spacer"></span><button id="libClose" data-i18n="btn.close">Close</button></div>
+    <div class="modalBtns"><span class="spacer"></span><button id="libClose" data-i18n="btn.close" data-i18n-title="tip.close">Close</button></div>
   </div>
 </div>
 
@@ -197,9 +228,12 @@
 <script src="js/layout.js"></script>
 <script src="js/i18n.js"></script>
 <script src="js/schema.js"></script>
+<script src="js/plantdb.js"></script>
+<script src="js/garden.js"></script>
 <script src="js/materials.js"></script>
 <script src="js/inventory.js"></script>
 <script src="js/llm.js"></script>
+<script src="js/blender.js"></script>
 <script src="js/prompts.js"></script>
 <script src="js/storage.js"></script>
 <script src="js/optimizer.js"></script>

@@ -2,15 +2,24 @@
 (function () {
   'use strict';
 
-  function systemPrompt(lang) {
+  function systemPrompt(lang, mode) {
+    var garden = mode === 'garden';
     var p = [
-      'You are an expert carpenter, furniture maker and DIY assistant embedded in a 3D design tool.',
-      'You design buildable real-world projects (mainly wood, but also metal/plastic parts when needed).',
+      garden
+        ? 'You are an expert garden designer, horticulturist and carpenter embedded in a 3D garden design tool.'
+        : 'You are an expert carpenter, furniture maker and DIY assistant embedded in a 3D design tool.',
+      garden
+        ? 'You design real-world gardens: wooden enclosures (raised beds, planters, trellises, cold frames, fences) built like furniture, plus the planting plan inside them.'
+        : 'You design buildable real-world projects (mainly wood, but also metal/plastic parts when needed).',
       'The tool renders your designs in 3D from structured JSON. You NEVER output HTML or code.',
       '',
       window.Schema.DOC,
+      garden ? '' : null,
+      garden ? window.Schema.PLANT_DOC : null,
       '',
       (window.Inventory ? Inventory.promptBlock() : ''),
+      (garden && window.PlantDB) ? '' : null,
+      (garden && window.PlantDB) ? PlantDB.promptBlock() : null,
       '',
       'RESPONSE PROTOCOL — you must reply with EXACTLY ONE JSON object (no prose outside it), one of:',
       '1. A complete design:',
@@ -24,6 +33,7 @@
       '     {"op":"update_part","id":partId,"set":{...only the changed fields; dimensions/position/rotation/material are merged key-by-key...}},',
       '     {"op":"add_part","part":{...complete part per schema...}},',
       '     {"op":"remove_part","id":partId},  (joints and assembly references to it are cleaned up automatically)',
+      garden ? '     {"op":"add_plant","plant":{...complete plant per schema...}}, {"op":"update_plant","id":plantId,"set":{...only changed fields; position/care merged key-by-key...}}, {"op":"remove_plant","id":plantId},' : null,
       '     {"op":"add_joint","joint":{...}}, {"op":"update_joint","id":jointId,"set":{...}}, {"op":"remove_joint","id":jointId},',
       '     {"op":"update_meta","set":{"name":...,"description":...}},',
       '     {"op":"set_hardware","hardware":[...complete new list...]},',
@@ -63,6 +73,29 @@
       '  level frame: it intersects at one end and floats at the other.',
       '- Orientation conventions: +x = right, -x = left, +z = front (toward the viewer), -z = back, y = up.',
       '  Name parts by their true position ("front rail" runs along x at the front edge, +z).',
+      garden ? [
+        '',
+        'GARDEN DESIGN RULES (very important — you are the horticultural expert, the user relies on your knowledge):',
+        '- COMPANION PLANTING: decide which plants grow well together and which do not. Place companions in the',
+        '  same bed near each other; place antagonists in different beds or at opposite ends. Fill each plant\'s',
+        '  "companions"/"avoid" lists with real horticultural knowledge, and explain key pairings in the summary.',
+        '- SPACING: decide realistic mature spacing per species and set "spacing" accordingly (e.g. tomato ~500 mm,',
+        '  lettuce ~250 mm, carrot ~75 mm). Position plants so same-species neighbors are >= spacing apart and',
+        '  different-species neighbors are >= the average of both spacings. Keep plants inside their bed with room',
+        '  to the walls (>= half the mature diameter where practical).',
+        '- CARE: for PLANT CATALOG species leave care fields as "" — the tool fills them in the user\'s language.',
+        '  For species NOT in the catalog, fill EVERY care field (sun, water, soil, planting, harvest, notes) with',
+        '  specific, actionable advice — the user reads it by clicking the plant in 3D.',
+        '- LIGHT: put tall plants (tomatoes, climbers, sweetcorn) on the north/back side (-z) so they do not shade',
+        '  low crops; shade-tolerant crops (lettuce, spinach) may sit in their shadow.',
+        '- ENCLOSURES are real woodwork: build raised beds/planters/trellises from the STOCK INVENTORY with proper',
+        '  joints, prep operations and assembly steps, exactly like furniture. Use rot-resistant species (larch,',
+        '  douglas fir, pressure-treated pine) for soil contact. Every bed gets a soil fill part (see GARDEN EXTENSION).',
+        '- ASSEMBLY: build steps first (enclosures), then planting steps that list plant ids in "parts", grouped',
+        '  by bed or row with clear planting instructions.',
+        '- Typical raised bed: 2 stacked 28x140 boards per wall on 45x45 corner posts, soil filled to ~40 mm below the rim.',
+        '- Climbing plants (beans, peas, cucumbers) need a trellis or stakes — model them as parts.'
+      ].join('\n') : null,
       '',
       'JOINT RULES (very important — think carefully before placing each joint):',
       '- Create a joint ONLY where its two parts physically touch. Before writing a joint, verify from the part',
@@ -100,13 +133,40 @@
       p.push('"questions" fields. Use correct German woodworking terminology (e.g. "Leimholzplatte", "Senkkopfschraube",');
       p.push('"vorbohren", "Kantholz"). Keep ALL JSON keys and enumerated values (shape, type, finish, grainDirection,');
       p.push('prep operation "type", "scope") in English exactly as the schema specifies.');
+      if (garden) {
+        p.push('Plants: write "name" and every "care" field in German, but keep "species", "companions" and "avoid"');
+        p.push('as lowercase ENGLISH common names (they are internal matching keys, e.g. "tomato", "basil").');
+      }
     }
-    return p.join('\n');
+    return p.filter(function (x) { return x !== null; }).join('\n');
   }
 
   /* Stage-1 prompt of two-pass generation: think in text, no geometry JSON yet. */
-  function planSystemPrompt(lang) {
-    var p = [
+  function planSystemPrompt(lang, mode) {
+    var garden = mode === 'garden';
+    var p = garden ? [
+      'You are an expert garden designer, horticulturist and carpenter planning a garden project',
+      '(raised beds, planters, trellises and the planting inside them).',
+      'In THIS step you produce a concise GARDEN PLAN — NOT the final design data.',
+      'Reply in exactly ONE of these three ways:',
+      '1. If the request is ambiguous or missing data that materially changes the design:',
+      '   {"type":"clarify","message":"short intro","questions":["q1?","q2?"]}   (JSON only, max 4 questions)',
+      '2. If it is conversation or advice that needs no design: {"type":"chat","message":"your answer"}   (JSON only)',
+      '3. Otherwise: a plain-text plan (NO JSON, no code fences) with exactly these sections:',
+      '   NAME: short project name',
+      '   OVERALL: garden/bed footprint W x D in mm, bed heights, orientation assumptions (back = -z = north)',
+      '   ENCLOSURES: numbered list of ALL wooden members — count, cross-section, length, stock from the',
+      '            STOCK INVENTORY below (e.g. "8x wall board — Board 28x140mm, 2000mm"); plus one soil fill per bed.',
+      '   PLANTS: table of species — count | mature height | spacing mm | companions | keep away from.',
+      '            PREFER species from the PLANT CATALOG below (their data is reliable and bilingual);',
+      '            justify key companion pairings in one line each.',
+      '   LAYOUT: coordinate logic with arithmetic shown (bed positions, soil surface height, row z-positions,',
+      '            plant x-positions, e.g. "carrot row: x = 200 + n*100, z = 330, y = soil top 240").',
+      '            Tall species at the back (-z), low/shade-tolerant in front.',
+      '   BUILD & PLANTING ORDER: 4-8 short ordered steps (build the enclosures first, then plant).',
+      'Rules: metric mm; realistic stock sizes and rot-resistant wood for soil contact; same-species distance >=',
+      'spacing, different-species distance >= average of both spacings; assume sensible defaults and STATE them.'
+    ] : [
       'You are an expert carpenter and furniture designer helping plan a DIY (mainly wood) project.',
       'In THIS step you produce a concise BUILD PLAN — NOT the final design data.',
       'Reply in exactly ONE of these three ways:',
@@ -128,6 +188,10 @@
       p.push('');
       p.push(Inventory.promptBlock());
     }
+    if (garden && window.PlantDB) {
+      p.push('');
+      p.push(PlantDB.promptBlock());
+    }
     if (lang === 'de') {
       p.push('');
       p.push('LANGUAGE: The user speaks German. Write the plan and any "message"/"questions" in natural German.');
@@ -136,9 +200,9 @@
     return p.join('\n');
   }
 
-  function buildPlanMessages(history, currentDesign, selectedIds, userText) {
+  function buildPlanMessages(history, currentDesign, selectedIds, userText, mode) {
     var lang = window.I18n ? window.I18n.getLang() : 'en';
-    var msgs = [{ role: 'system', content: planSystemPrompt(lang) }];
+    var msgs = [{ role: 'system', content: planSystemPrompt(lang, mode) }];
     history.forEach(function (m) { msgs.push(m); });
     var bits = [];
     if (currentDesign) bits.push('CURRENT DESIGN JSON (for reference):\n' + JSON.stringify(compactDesign(currentDesign)));
@@ -153,9 +217,13 @@
    * Those issues then feed the normal (text-model) repair loop. */
   function buildVisionMessages(design, userText, images) {
     var lang = window.I18n ? window.I18n.getLang() : 'en';
+    var garden = design && design.meta && design.meta.mode === 'garden';
     var sys = [
-      'You are an expert carpenter reviewing 3D renders of a DIY woodworking design for buildability problems.',
+      garden
+        ? 'You are an expert garden designer reviewing 3D renders of a garden design (wooden enclosures + plants) for problems.'
+        : 'You are an expert carpenter reviewing 3D renders of a DIY woodworking design for buildability problems.',
       'The renders show the same model from several angles. Dark discs on panels mark through-hole cutouts.',
+      garden ? 'Plants are rendered as stylized green shapes with floating name labels — that is intended, not a defect. Judge only their placement (inside their bed, on the soil surface, sensibly spaced).' : null,
       'Look for: parts floating in the air or lacking support; parts intersecting/passing through each other;',
       'misaligned or asymmetric members; missing structural members (nothing holds something up); parts sticking',
       'out past the design; proportions or features that contradict the USER REQUEST.',
@@ -169,7 +237,7 @@
       'Cross-check each suspicion against the part coordinates before reporting it.',
       'An empty list is a good answer — do not invent problems.',
       'If the design looks structurally correct and matches the request, reply {"type":"critique","issues":[]}.'
-    ].join('\n');
+    ].filter(function (x) { return x !== null; }).join('\n');
     if (lang === 'de') sys += '\nWrite the issue sentences in German; keep part ids and JSON keys unchanged.';
     var partLines = (design.parts || []).map(function (p) {
       var dm = p.dimensions;
@@ -177,6 +245,11 @@
       return p.id + ': ' + dims + 'mm @ (' + p.position.x + ',' + p.position.y + ',' + p.position.z + ')' +
         ((p.cutouts && p.cutouts.length) ? ' [' + p.cutouts.length + ' cutout(s)]' : '');
     }).join('\n');
+    if (design.plants && design.plants.length) {
+      partLines += '\n\nPLANTS (id: species, mature Øxheight, @ position on soil):\n' + design.plants.map(function (p) {
+        return p.id + ': ' + p.species + ', Ø' + p.matureDiameter + '×' + p.matureHeight + 'mm @ (' + p.position.x + ',' + p.position.y + ',' + p.position.z + ')';
+      }).join('\n');
+    }
     var content = [{ type: 'text', text: 'USER REQUEST: ' + userText + '\n\nPARTS (id: WxHxD @ center, mm, y-up, floor at y=0):\n' + partLines + '\n\nRenders follow (iso front-left, iso back-right, low front):' }];
     images.forEach(function (url) {
       content.push({ type: 'image_url', image_url: { url: url } });
@@ -189,6 +262,7 @@
    * the model must verify each claim against the coordinates first. */
   function buildRepairMessages(design, issues, visual) {
     var lang = window.I18n ? window.I18n.getLang() : 'en';
+    var mode = design && design.meta && design.meta.mode;
     var intro = visual
       ? 'A VISUAL review of rendered images reported these POSSIBLE problems. Image reviews can be wrong:\n- ' +
         issues.join('\n- ') +
@@ -197,7 +271,7 @@
       : 'An automated geometry check found these problems:\n- ' + issues.join('\n- ') +
         '\n\nFix ONLY these problems by adjusting positions/dimensions/joints minimally.';
     return [
-      { role: 'system', content: systemPrompt(lang) },
+      { role: 'system', content: systemPrompt(lang, mode) },
       { role: 'user', content:
         'CURRENT DESIGN JSON:\n' + JSON.stringify(compactDesign(design)) +
         '\n\n' + intro +
@@ -206,11 +280,37 @@
     ];
   }
 
+  /* Translation turn: translate every human-readable text of the design to the
+   * target language. Only text fields of the reply are merged (Schema.mergeTexts),
+   * so geometry cannot be damaged even if the model changes numbers. */
+  function buildTranslateMessages(design, targetLang) {
+    var tName = targetLang === 'de' ? 'German' : 'English';
+    var sys = [
+      'You are a professional technical translator embedded in a 3D design tool for woodworking and gardening.',
+      'Translate ALL human-readable text of the design JSON into natural ' + tName + ':',
+      '- meta.name and meta.description',
+      '- every part and plant "name", part "stock" descriptions',
+      '- every prep operation "instruction" and prep "notes"',
+      '- joint "note" fields, hardware names and notes',
+      '- assembly and finishing "title" and "instruction"',
+      '- plant care texts — but ONLY fields that are non-empty; leave empty ("") care fields empty.',
+      'Use correct ' + (targetLang === 'de' ? 'German woodworking and gardening terminology (e.g. "Senkkopfschraube", "vorbohren", "ausgeizen").' : 'English woodworking and gardening terminology.'),
+      'Do NOT change: ids, all numbers and coordinates, "species"/"companions"/"avoid" values (lowercase English keys),',
+      'enum values (shape, joint type, finish, grainDirection, habit, prep operation "type"), array order or structure.',
+      'Reply with EXACTLY ONE JSON object, nothing else:',
+      '{ "type": "design", "scope": "modify", "summary": "one sentence in ' + tName + '", "design": { ...the COMPLETE design, all texts translated... } }'
+    ].join('\n');
+    return [
+      { role: 'system', content: sys },
+      { role: 'user', content: 'DESIGN JSON:\n' + JSON.stringify(compactDesign(design)) + '\n\nTranslate all texts to ' + tName + '.' }
+    ];
+  }
+
   /* Build message list for a generation/modification turn.
    * planText (optional): stage-1 build plan the model must follow. */
-  function buildMessages(history, currentDesign, selectedIds, userText, planText) {
+  function buildMessages(history, currentDesign, selectedIds, userText, planText, mode) {
     var lang = window.I18n ? window.I18n.getLang() : 'en';
-    var msgs = [{ role: 'system', content: systemPrompt(lang) }];
+    var msgs = [{ role: 'system', content: systemPrompt(lang, mode) }];
     history.forEach(function (m) { msgs.push(m); });
 
     var contextBits = [];
@@ -219,7 +319,8 @@
     }
     if (selectedIds && selectedIds.length) {
       var names = selectedIds.map(function (id) {
-        var p = currentDesign && currentDesign.parts.find(function (q) { return q.id === id; });
+        var p = currentDesign && (currentDesign.parts.find(function (q) { return q.id === id; }) ||
+          (currentDesign.plants || []).find(function (q) { return q.id === id; }));
         return p ? (id + ' ("' + p.name + '")') : id;
       });
       contextBits.push('USER HAS SELECTED THESE PARTS IN THE 3D VIEW (“the selected piece” refers to them): ' + names.join(', '));
@@ -242,6 +343,8 @@
       if (p.prep && !p.prep.notes) delete p.prep.notes;
     });
     (c.joints || []).forEach(function (j) { if (j.position === null) delete j.position; });
+    if (c.plants && !c.plants.length) delete c.plants;
+    (c.plants || []).forEach(function (p) { if (p.color === null) delete p.color; });
     return c;
   }
 
@@ -250,6 +353,7 @@
     buildMessages: buildMessages,
     buildPlanMessages: buildPlanMessages,
     buildVisionMessages: buildVisionMessages,
-    buildRepairMessages: buildRepairMessages
+    buildRepairMessages: buildRepairMessages,
+    buildTranslateMessages: buildTranslateMessages
   };
 })();

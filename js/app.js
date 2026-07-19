@@ -12,6 +12,10 @@
   var history = [], hIndex = -1, lastPlan = null;   // undo/redo snapshots + last cutting plan
   var lastUserText = '';     // last design request (context for the vision critic)
   var pendingVision = false; // run a vision review after the current turn settles
+  var appMode = 'workshop';  // 'workshop' (furniture/DIY) | 'garden'
+  var cardIsPlant = false;   // the part card currently shows a plant
+  var sampleLoaded = null;   // 'bed' | 'garden' while the built-in sample is loaded unmodified
+                             // (lets a language switch regenerate it in the new language)
 
   var $ = function (id) { return document.getElementById(id); };
   var t = function (k, v) { return window.I18n ? I18n.t(k, v) : k; };
@@ -24,6 +28,7 @@
     Viewer.init($('viewport'), {
       onSelect: onSelectionChanged,
       onPartInfo: showPartCard,
+      onPlantInfo: showPlantCard,
       onJointInfo: showJointCard,
       onMeasure: function (d) { addMsg('sys', t('msg.measured', { d: d })); }
     });
@@ -36,16 +41,95 @@
   $('langSel').value = I18n.getLang();
   $('langSel').onchange = function () { switchLanguage(this.value); };
   function switchLanguage(l) {
+    var prevLang = I18n.getLang();
     I18n.setLang(l);
     var s = LLM.settings(); s.language = l; LLM.saveSettings(s);
     $('langSel').value = l;
-    renderCutList(); renderSteps(); renderFinishing();
+    if (l !== prevLang && sampleLoaded && !dirty) {
+      // Pristine built-in sample: regenerate it in the new language so plant
+      // names, care texts, part names and steps switch too.
+      setDesign(sampleLoaded === 'garden' ? Garden.sampleGarden() : Schema.sampleBed(),
+        sampleLoaded === 'bed' ? 'Single bed (900×2000) — sample' : null);
+      dirty = false;
+      resetHistory();
+    } else {
+      renderCutList(); renderSteps(); renderFinishing(); renderPlantsTab(); renderCareTab();
+    }
+    setAppMode(appMode); // refresh mode button label + placeholder
     if (Viewer.getMode() === 'assembly') gotoStep(Viewer.getStep());
+    // Non-sample design loaded: its texts stay as generated — offer an AI translation.
+    if (l !== prevLang && currentDesign && !(sampleLoaded && !dirty)) offerTranslate(l);
     dbg('info', 'Language switched to ' + l);
   }
 
+  // ---------- AI design translation ----------
+  function offerTranslate(target) {
+    var m = addMsg('ai', t('msg.translateOffer'));
+    var b = document.createElement('button');
+    b.className = 'qbtn';
+    b.textContent = t('btn.translate');
+    b.onclick = function () { b.disabled = true; runTranslate(target); };
+    m.appendChild(b);
+  }
+
+  /* Ask the AI to translate all design texts, then merge ONLY the text fields
+   * (Schema.mergeTexts) — geometry, ids and species keys cannot be affected. */
+  function runTranslate(target) {
+    if (!currentDesign || activeReq) return;
+    var note = addMsg('sys', t('msg.translating'));
+    $('btnSend').classList.add('hidden');
+    $('btnStop').classList.remove('hidden');
+    activeReq = LLM.chat(Prompts.buildTranslateMessages(currentDesign, target), null, { responseSchema: Schema.ENVELOPE });
+    activeReq.promise.then(function (full) {
+      finishReq();
+      note.remove();
+      var env = LLM.extractJSON(full);
+      if (!env || env.type !== 'design' || !env.design) { addMsg('err', t('msg.translateFail')); return; }
+      var v = Schema.validate(Schema.mergeTexts(currentDesign, env.design));
+      if (!v.ok) { addMsg('err', t('msg.translateFail')); return; }
+      setDesign(v.design, v.design.meta.name);
+      sampleLoaded = null;
+      markDirty();
+      pushHistory();
+      addMsg('ai', '🌐 ' + (env.summary || t('msg.translated')));
+    }).catch(function (err) {
+      finishReq();
+      note.remove();
+      if (err && err.name === 'AbortError') addMsg('sys', t('msg.stopped'));
+      else addMsg('err', t('msg.translateFail'));
+    });
+  }
+
+  // ---------- workshop / garden mode ----------
+  function setAppMode(m) {
+    appMode = m;
+    $('btnMode').textContent = t(m === 'garden' ? 'btn.mode.workshop' : 'btn.mode.garden');
+    $('btnMode').title = t('btn.mode.title');
+    $('chatInput').placeholder = t(m === 'garden' ? 'chat.placeholder.garden' : 'chat.placeholder');
+    document.querySelectorAll('.gardenTab').forEach(function (b) { b.classList.toggle('hidden', m !== 'garden'); });
+    var active = document.querySelector('.tabBtn.active');
+    if (m !== 'garden' && active && (active.dataset.tab === 'plants' || active.dataset.tab === 'care')) activateTab('cutlist');
+  }
+
+  $('btnMode').onclick = function () {
+    if (!confirmDiscard()) return;
+    if (activeReq) activeReq.abort();
+    var toGarden = appMode !== 'garden';
+    currentRecordId = null;
+    chatHistory = [];
+    dirty = false;
+    clearChatLog();
+    setDesign(toGarden ? Garden.sampleGarden() : Schema.sampleBed(),
+      toGarden ? null : 'Single bed (900×2000) — sample');
+    sampleLoaded = toGarden ? 'garden' : 'bed';
+    dirty = false;
+    resetHistory();
+    addMsg('sys', t(toGarden ? 'msg.gardenLoaded' : 'msg.sampleLoaded'));
+  };
+
   addMsg('sys', t('msg.welcome'));
   setDesign(Schema.sampleBed(), 'Single bed (900×2000) — sample');
+  sampleLoaded = 'bed';
   dirty = false;
   resetHistory();
   addMsg('sys', t('msg.sampleLoaded'));
@@ -107,6 +191,50 @@
     if (currentDesign) Export3D.exportOBJ(currentDesign, currentName);
   };
 
+  // ---------- Blender bridge (optional, off by default) ----------
+  function updateBridgeUI() {
+    var on = Blender.enabled();
+    ['btnRender', 'btnStl', 'btnGlb'].forEach(function (id) { $(id).classList.toggle('hidden', !on); });
+  }
+  updateBridgeUI();
+
+  $('btnRender').onclick = function () {
+    if (!currentDesign || !Blender.enabled()) return;
+    var btn = this;
+    btn.disabled = true;
+    var note = addMsg('sys', t('msg.rendering'));
+    Blender.render(currentDesign, { width: 1024, height: 768 }).then(function (imgs) {
+      note.remove();
+      var m = addMsg('ai', '📷 ' + (currentName || ''));
+      var img = document.createElement('img');
+      img.src = imgs[0];
+      img.alt = 'Blender render';
+      img.style.cssText = 'max-width:100%;border-radius:8px;cursor:pointer;margin-top:6px';
+      img.onclick = function () {
+        var w = window.open('', '_blank');
+        if (w) w.document.write('<title>Render</title><img src="' + imgs[0] + '" style="max-width:100%">');
+      };
+      m.appendChild(img);
+    }).catch(function (e) {
+      note.remove();
+      addMsg('err', t('err.blender', { e: e.message }));
+    }).then(function () { btn.disabled = false; });
+  };
+
+  function bridgeDownload(kind, btn) {
+    if (!currentDesign || !Blender.enabled()) return;
+    btn.disabled = true;
+    var note = addMsg('sys', t('msg.exporting', { f: kind.toUpperCase() }));
+    Blender.download(kind, currentDesign, currentName).then(function () {
+      note.remove();
+    }).catch(function (e) {
+      note.remove();
+      addMsg('err', t('err.blender', { e: e.message }));
+    }).then(function () { btn.disabled = false; });
+  }
+  $('btnStl').onclick = function () { bridgeDownload('stl', this); };
+  $('btnGlb').onclick = function () { bridgeDownload('glb', this); };
+
   // ---------- PDF plans export ----------
   $('btnPdf').onclick = function () {
     if (!currentDesign) { addMsg('sys', t('msg.nothingToSave')); return; }
@@ -121,8 +249,8 @@
   // ---------- part-level diff for AI modifications ----------
   function diffDesigns(a, b) {
     var am = {}, bm = {};
-    a.parts.forEach(function (p) { am[p.id] = JSON.stringify(p); });
-    b.parts.forEach(function (p) { bm[p.id] = JSON.stringify(p); });
+    a.parts.concat(a.plants || []).forEach(function (p) { am[p.id] = JSON.stringify(p); });
+    b.parts.concat(b.plants || []).forEach(function (p) { bm[p.id] = JSON.stringify(p); });
     var added = 0, removed = 0, modified = 0;
     Object.keys(bm).forEach(function (id) { if (!am[id]) added++; else if (am[id] !== bm[id]) modified++; });
     Object.keys(am).forEach(function (id) { if (!bm[id]) removed++; });
@@ -194,7 +322,7 @@
   // Stage 1: free-text build plan (or direct clarify/chat JSON — handled as usual).
   function planStage(hist, text, thinking) {
     thinking.textContent = t('chat.planning');
-    activeReq = LLM.chat(Prompts.buildPlanMessages(hist, currentDesign, selectedIds, text), function (_d, full) {
+    activeReq = LLM.chat(Prompts.buildPlanMessages(hist, currentDesign, selectedIds, text, appMode), function (_d, full) {
       thinking.textContent = t('chat.planning') + ' (' + full.length + ')';
     });
     activeReq.promise.then(function (full) {
@@ -216,7 +344,7 @@
   // Stage 2 (or single pass): produce/modify the design JSON.
   function buildStage(hist, text, plan, thinking) {
     thinking.textContent = t('chat.designing');
-    var msgs = Prompts.buildMessages(hist, currentDesign, selectedIds, text, plan);
+    var msgs = Prompts.buildMessages(hist, currentDesign, selectedIds, text, plan, appMode);
     activeReq = LLM.chat(msgs, function (_d, full) {
       thinking.textContent = t('chat.designing') + ' (' + full.length + ')';
     }, { responseSchema: Schema.ENVELOPE });
@@ -305,6 +433,8 @@
       chatHistory.push({ role: 'assistant', content: 'Produced invalid design: ' + v.errors.join('; ') });
       return;
     }
+    // A design generated in garden mode stays a garden design even before it has plants.
+    if (appMode === 'garden') v.design.meta.mode = 'garden';
     // Deterministic geometry cleanup: round to 0.5mm, snap to floor, close small joint gaps.
     var snap = Schema.snapDesign(v.design);
     if (snap.floored || snap.gapsClosed) dbg('info', 'snap: ' + snap.floored + ' part(s) snapped to floor, ' + snap.gapsClosed + ' joint gap(s) closed');
@@ -325,10 +455,14 @@
     }
     // Patches keep the user's chosen name; new designs adopt the design name.
     setDesign(v.design, (env.type === 'patch' && currentName) ? currentName : v.design.meta.name);
+    sampleLoaded = null;   // AI touched it — no longer the pristine sample
     markDirty();
     pushHistory();
     var summary = (depth ? '🔧 ' : '') + (env.summary || v.design.meta.name);
-    addMsg('ai', summary + '\n' + t('msg.designStats', { p: v.design.parts.length, s: v.design.assembly.length }));
+    var nPlants = (v.design.plants || []).length;
+    addMsg('ai', summary + '\n' + (nPlants
+      ? t('msg.designStatsGarden', { p: v.design.parts.length, n: nPlants, s: v.design.assembly.length })
+      : t('msg.designStats', { p: v.design.parts.length, s: v.design.assembly.length })));
     if (diffMsg) addMsg('sys', diffMsg);
     var warnBits = [];
     if (audit.moved) warnBits.push(t('audit.moved', { n: audit.moved }));
@@ -372,7 +506,19 @@
 
   function runVisionReview(s) {
     if (activeReq || !currentDesign) return;
-    var shots = Viewer.captureViews(512);
+    // With the Blender bridge on, use proper renders (real shadows and cutouts
+    // give the critic far better evidence); fall back to WebGL screenshots.
+    var getShots = Blender.enabled()
+      ? Blender.renderViews(currentDesign, 512).catch(function (e) {
+          dbg('warn', 'vision: Blender render failed (' + e.message + '), using WebGL screenshots');
+          return Viewer.captureViews(512);
+        })
+      : Promise.resolve(Viewer.captureViews(512));
+    getShots.then(function (shots) { runVisionReviewWith(s, shots); });
+  }
+
+  function runVisionReviewWith(s, shots) {
+    if (activeReq || !currentDesign) return;
     if (!shots.length) { dbg('error', 'vision: no screenshots captured (WebGL canvas unreadable?)'); return; }
     var kb = Math.round(shots.reduce(function (a, u) { return a + u.length; }, 0) * 0.75 / 1024);
     dbg('info', 'vision: sending ' + shots.length + ' renders (~' + kb + ' KB) to ' + ((s.visionEndpoint || '').trim() || 'main endpoint'));
@@ -502,11 +648,14 @@
   function setDesign(d, name) {
     currentDesign = d;
     currentName = name || (d && d.meta.name) || 'Untitled';
+    if (d) setAppMode((d.meta && d.meta.mode === 'garden') ? 'garden' : 'workshop');
     Viewer.loadDesign(d);
     setModeUI('model');
     renderCutList();
     renderSteps();
     renderFinishing();
+    renderPlantsTab();
+    renderCareTab();
     document.title = currentName + ' — DIY Workshop';
   }
 
@@ -643,11 +792,82 @@
     addMsg('sys', t('msg.applied', { n: label, c: targets.length }));
   }
 
+  // ---------- garden tabs ----------
+  var CARE_ROWS = [['sun', '🌞', 'pc.sun'], ['water', '💧', 'pc.water'], ['soil', '🪴', 'pc.soil'],
+    ['planting', '🌱', 'pc.planting'], ['harvest', '🧺', 'pc.harvest'], ['notes', '📝', 'pc.carenotes']];
+
+  // Species keys are English matching keys; display them in the UI language.
+  function spLabel(s) { return Garden.speciesLabel(s); }
+  function spList(a) { return (a || []).map(spLabel).join(', '); }
+
+  function plantGroups() {
+    var groups = {};
+    ((currentDesign && currentDesign.plants) || []).forEach(function (p) {
+      if (!groups[p.species]) groups[p.species] = { species: p.species, sample: p, qty: 0, ids: [] };
+      groups[p.species].qty++;
+      groups[p.species].ids.push(p.id);
+    });
+    return Object.keys(groups).map(function (k) { return groups[k]; });
+  }
+
+  function renderPlantsTab() {
+    var el = $('tab-plants');
+    var groups = plantGroups();
+    if (!groups.length) { el.innerHTML = '<i>' + t('pl.empty') + '</i>'; return; }
+    var html = '<table class="cut"><tr><th>' + t('pl.qty') + '</th><th>' + t('pl.species') + '</th><th>' +
+      t('pl.spacing') + '</th><th>' + t('pl.size') + '</th><th>' + t('pl.companions') + '</th><th>' + t('pl.avoid') + '</th></tr>';
+    groups.forEach(function (g, i) {
+      var p = g.sample;
+      html += '<tr data-i="' + i + '"><td>' + g.qty + '×</td><td>' + Garden.emojiFor(p.species, p.habit) + ' ' + esc(spLabel(p.species)) +
+        '</td><td>' + Math.round(p.spacing) + ' mm</td><td>Ø' + Math.round(p.matureDiameter) + ' × ' + Math.round(p.matureHeight) +
+        ' mm</td><td>' + esc(spList(p.companions) || '—') + '</td><td>' + esc(spList(p.avoid) || '—') + '</td></tr>';
+    });
+    html += '</table>';
+    el.innerHTML = html;
+    el.querySelectorAll('tr[data-i]').forEach(function (tr) {
+      tr.onclick = function () {
+        var g = groups[Number(tr.dataset.i)];
+        Viewer.setSelection(g.ids);
+        showPlantCard(g.sample);
+      };
+    });
+  }
+
+  function renderCareTab() {
+    var el = $('tab-care');
+    var groups = plantGroups();
+    if (!groups.length) { el.innerHTML = '<i>' + t('pl.empty') + '</i>'; return; }
+    el.innerHTML = '';
+    groups.forEach(function (g) {
+      var p = g.sample;
+      var care = Garden.resolveCare(p);
+      var rows = '';
+      CARE_ROWS.forEach(function (f) {
+        if (care[f[0]]) rows += f[1] + ' <b>' + t(f[2]) + ':</b> ' + esc(care[f[0]]) + '<br>';
+      });
+      if (p.companions.length) rows += '✅ <b>' + t('pc.companions') + ':</b> ' + esc(spList(p.companions)) + '<br>';
+      if (p.avoid.length) rows += '🚫 <b>' + t('pc.avoid') + ':</b> ' + esc(spList(p.avoid));
+      var d = document.createElement('div');
+      d.className = 'finRow';
+      d.innerHTML = '<b>' + Garden.emojiFor(p.species, p.habit) + ' ' + esc(spLabel(p.species)) + '</b> (' + g.qty + '×)<br>' + rows;
+      el.appendChild(d);
+    });
+  }
+
   // ---------- part card ----------
   var cardPart = null;
+  // Finish controls make no sense for a plant — hide them there.
+  function setCardControls(isPlant) {
+    cardIsPlant = isPlant;
+    ['pcColor', 'pcFinish', 'pcShineWrap', 'pcApply'].forEach(function (id) {
+      $(id).classList.toggle('hidden', isPlant);
+    });
+  }
+
   function showPartCard(p) {
     cardPart = p;
     if (!p) { $('partCard').classList.add('hidden'); return; }
+    setCardControls(false);
     $('pcName').textContent = p.name;
     var joints = (currentDesign.joints || []).filter(function (j) { return j.parts.indexOf(p.id) >= 0; });
     var html = '<div class="kv">' + t('pc.dimensions') + ': <b>' + Schema.dimsLabel(p) +
@@ -673,6 +893,29 @@
     $('partCard').classList.remove('hidden');
   }
 
+  // Plant card: how to care for this plant (data generated by the AI at design time).
+  function showPlantCard(p) {
+    cardPart = p;
+    if (!p) { $('partCard').classList.add('hidden'); return; }
+    setCardControls(true);
+    $('pcName').textContent = Garden.emojiFor(p.species, p.habit) + ' ' + p.name;
+    var html = '<div class="kv">' + t('pc.species') + ': <b>' + esc(spLabel(p.species)) + '</b> · ' +
+      t('pc.habit') + ': ' + esc(t('habit.' + p.habit)) + '</div>' +
+      '<div class="kv">' + t('pc.mature') + ': <b>Ø' + Math.round(p.matureDiameter) + ' × ' + Math.round(p.matureHeight) + ' mm</b> · ' +
+      t('pc.spacing') + ': <b>' + Math.round(p.spacing) + ' mm</b></div>' +
+      '<div class="kv" style="margin-top:6px"><b>' + t('pc.care') + '</b></div><ul>';
+    var care = Garden.resolveCare(p);   // own texts + catalog fallback, in UI language
+    CARE_ROWS.forEach(function (f) {
+      if (care[f[0]]) html += '<li>' + f[1] + ' <b>' + t(f[2]) + ':</b> ' + esc(care[f[0]]) + '</li>';
+    });
+    html += '</ul>';
+    if (p.companions.length) html += '<div class="kv">✅ ' + t('pc.companions') + ': ' + esc(spList(p.companions)) + '</div>';
+    if (p.avoid.length) html += '<div class="kv">🚫 ' + t('pc.avoid') + ': ' + esc(spList(p.avoid)) + '</div>';
+    html += '<div class="kv">' + t('pc.step') + ': ' + stepOf(p.id) + '</div>';
+    $('pcBody').innerHTML = html;
+    $('partCard').classList.remove('hidden');
+  }
+
   function showJointCard(j) {
     if (!j) return;
     $('pcName').textContent = t('pc.joint') + ': ' + j.type.replace(/_/g, ' ');
@@ -682,7 +925,8 @@
   }
 
   function partName(id) {
-    var p = currentDesign && currentDesign.parts.find(function (q) { return q.id === id; });
+    var p = currentDesign && (currentDesign.parts.find(function (q) { return q.id === id; }) ||
+      (currentDesign.plants || []).find(function (q) { return q.id === id; }));
     return p ? p.name : id;
   }
 
@@ -694,7 +938,7 @@
   $('pcClose').onclick = function () { $('partCard').classList.add('hidden'); Viewer.clearSelection(); };
   $('pcFocus').onclick = function () { if (cardPart) Viewer.focusPart(cardPart.id); };
   $('pcApply').onclick = function () {
-    if (!cardPart) return;
+    if (!cardPart || cardIsPlant) return;
     var targets = selectedIds.length ? selectedIds : [cardPart.id];
     targets.forEach(function (id) {
       var p = currentDesign.parts.find(function (q) { return q.id === id; });
@@ -717,7 +961,8 @@
       var step = Number($('pcStep').value) * Number(b.dataset.dir);
       var targets = selectedIds.length ? selectedIds : [cardPart.id];
       targets.forEach(function (id) {
-        var p = currentDesign.parts.find(function (q) { return q.id === id; });
+        var p = currentDesign.parts.find(function (q) { return q.id === id; }) ||
+                (currentDesign.plants || []).find(function (q) { return q.id === id; });
         if (!p) return;
         p.position[b.dataset.axis] += step;
         Viewer.updatePartTransform(id);
@@ -766,11 +1011,12 @@
   $('asmNext').onclick = function () { gotoStep(Viewer.getStep() + 1); };
 
   // ---------- tabs ----------
+  function activateTab(tab) {
+    document.querySelectorAll('.tabBtn').forEach(function (x) { x.classList.toggle('active', x.dataset.tab === tab); });
+    document.querySelectorAll('.tabBody').forEach(function (x) { x.classList.toggle('active', x.id === 'tab-' + tab); });
+  }
   document.querySelectorAll('.tabBtn').forEach(function (b) {
-    b.onclick = function () {
-      document.querySelectorAll('.tabBtn').forEach(function (x) { x.classList.toggle('active', x === b); });
-      document.querySelectorAll('.tabBody').forEach(function (x) { x.classList.toggle('active', x.id === 'tab-' + b.dataset.tab); });
-    };
+    b.onclick = function () { activateTab(b.dataset.tab); };
   });
 
   // ---------- top bar ----------
@@ -780,6 +1026,7 @@
     currentRecordId = null;
     chatHistory = [];          // fresh LLM context — nothing from the old session is sent
     dirty = false;
+    sampleLoaded = null;
     setDesign(null, 'New design');
     resetHistory();
     clearChatLog();            // fresh chat window too
@@ -811,6 +1058,7 @@
       currentRecordId = null;
       chatHistory = r.chat || [];
       setDesign(r.design, r.name);
+      sampleLoaded = null;
       dirty = false;
       resetHistory();
       renderChatHistory();
@@ -831,7 +1079,7 @@
       '<td><input data-f="priority" type="number" min="1" max="5" value="' + (p.priority || 3) + '" style="width:44px"></td>' +
       '<td><input data-f="complexity" type="number" min="1" max="5" value="' + (p.complexity || 1) + '" style="width:44px"></td>' +
       '<td><input data-f="use" value="' + esc(p.use) + '"></td>' +
-      '<td><button class="invDel" title="Remove">✕</button></td>';
+      '<td><button class="invDel" title="' + esc(t('tip.remove')) + '">✕</button></td>';
     tr.querySelector('.invDel').onclick = function () { tr.remove(); };
     return tr;
   }
@@ -843,7 +1091,7 @@
       '<td><input data-f="name" value="' + esc(c.name) + '" style="width:170px"></td>' +
       '<td><input data-f="complexity" type="number" min="1" max="5" value="' + (c.complexity || 1) + '" style="width:44px"></td>' +
       '<td><input data-f="note" value="' + esc(c.note) + '"></td>' +
-      '<td><button class="invDel" title="Remove">✕</button></td>';
+      '<td><button class="invDel" title="' + esc(t('tip.remove')) + '">✕</button></td>';
     tr.querySelector('.invDel').onclick = function () { tr.remove(); };
     return tr;
   }
@@ -878,8 +1126,125 @@
     return inv;
   }
 
+  // Plant catalog editor inside the Stock modal (garden mode). Editable like
+  // the wood inventory: inline fields, add/delete, per-plant care texts in
+  // BOTH languages (📝), persisted in the browser via PlantDB.save().
+  function habitOptions(sel) {
+    return PlantDB.HABITS.map(function (h) {
+      return '<option value="' + h + '"' + (h === sel ? ' selected' : '') + '>' + esc(t('habit.' + h)) + '</option>';
+    }).join('');
+  }
+
+  function removeCareEditor(tr) {
+    var next = tr.nextElementSibling;
+    if (next && next.className === 'invCareEdit') next.remove();
+  }
+
+  // Expandable editor row: one line per care field with EN + DE inputs bound to tr._care.
+  function toggleCareEditor(tr) {
+    var next = tr.nextElementSibling;
+    if (next && next.className === 'invCareEdit') { next.remove(); return; }
+    var d = document.createElement('tr');
+    d.className = 'invCareEdit';
+    d.appendChild(document.createElement('td'));   // spacer under the emoji column
+    var td = document.createElement('td');
+    td.colSpan = 10;
+    CARE_ROWS.forEach(function (c) {
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:6px;align-items:center;margin:2px 0';
+      var lbl = document.createElement('span');
+      lbl.style.cssText = 'width:86px;flex:0 0 auto;color:var(--muted);font-size:12px';
+      lbl.textContent = c[1] + ' ' + t(c[2]);
+      row.appendChild(lbl);
+      ['en', 'de'].forEach(function (lg) {
+        var inp = document.createElement('input');
+        inp.style.flex = '1';
+        inp.placeholder = lg.toUpperCase();
+        inp.value = tr._care[lg][c[0]] || '';
+        inp.oninput = function () { tr._care[lg][c[0]] = inp.value; };
+        row.appendChild(inp);
+      });
+      td.appendChild(row);
+    });
+    d.appendChild(td);
+    tr.parentNode.insertBefore(d, tr.nextSibling);
+  }
+
+  function plantRow(e) {
+    var tr = document.createElement('tr');
+    tr.className = 'invRow';
+    // Care texts live on the row object; the 📝 editor reads/writes them so
+    // unsaved edits survive collapsing the editor or filtering.
+    tr._care = JSON.parse(JSON.stringify(e.care || { en: {}, de: {} }));
+    tr._care.en = tr._care.en || {}; tr._care.de = tr._care.de || {};
+    tr.innerHTML =
+      '<td>' + Garden.emojiFor(e.species, e.habit) + '</td>' +
+      '<td><input data-f="species" value="' + esc(e.species) + '" style="width:100px"></td>' +
+      '<td><input data-f="de" value="' + esc(e.de || '') + '" style="width:120px"></td>' +
+      '<td><select data-f="habit">' + habitOptions(e.habit) + '</select></td>' +
+      '<td><input data-f="height" type="number" min="20" value="' + (e.height || 300) + '" style="width:70px"></td>' +
+      '<td><input data-f="dia" type="number" min="20" value="' + (e.dia || 250) + '" style="width:70px"></td>' +
+      '<td><input data-f="spacing" type="number" min="10" value="' + (e.spacing || 250) + '" style="width:70px"></td>' +
+      '<td><input data-f="companions" value="' + esc((e.companions || []).join(',')) + '"></td>' +
+      '<td><input data-f="avoid" value="' + esc((e.avoid || []).join(',')) + '"></td>' +
+      '<td><button class="invCareBtn" title="' + esc(t('inv.editCare')) + '">📝</button></td>' +
+      '<td><button class="invDel" title="' + esc(t('tip.remove')) + '">✕</button></td>';
+    tr.querySelector('.invDel').onclick = function () { removeCareEditor(tr); tr.remove(); };
+    tr.querySelector('.invCareBtn').onclick = function () { toggleCareEditor(tr); };
+    return tr;
+  }
+
+  function renderPlantCatalog() {
+    var tbl = $('invPlants');
+    tbl.innerHTML = '<tr><th></th><th>' + [t('inv.hKey'), t('inv.hDe'), t('pc.habit'), t('inv.hHeight'), 'Ø',
+      t('pl.spacing'), t('pl.companions'), t('pl.avoid'), '', ''].join('</th><th>') + '</th></tr>';
+    PlantDB.list().forEach(function (e) { tbl.appendChild(plantRow(e)); });
+    applyPlantFilter();
+  }
+
+  // Filter hides rows instead of re-rendering, so pending edits survive.
+  function applyPlantFilter() {
+    var f = $('invPlantFilter').value.toLowerCase().trim();
+    $('invPlants').querySelectorAll('tr.invRow').forEach(function (tr) {
+      var hay = tr.querySelector('[data-f=species]').value + ' ' + tr.querySelector('[data-f=de]').value;
+      var show = !f || hay.toLowerCase().indexOf(f) >= 0;
+      tr.style.display = show ? '' : 'none';
+      var next = tr.nextElementSibling;
+      if (next && next.className === 'invCareEdit') next.style.display = show ? '' : 'none';
+    });
+  }
+  $('invPlantFilter').oninput = applyPlantFilter;
+
+  function collectPlantCatalog() {
+    var out = [];
+    $('invPlants').querySelectorAll('tr.invRow').forEach(function (tr) {
+      function val(f) { var el = tr.querySelector('[data-f=' + f + ']'); return el ? el.value.trim() : ''; }
+      var species = val('species').toLowerCase();
+      if (!species) return;
+      out.push({
+        species: species, de: val('de'), habit: val('habit'),
+        height: Number(val('height')), dia: Number(val('dia')), spacing: Number(val('spacing')),
+        companions: val('companions'), avoid: val('avoid'),
+        care: tr._care
+      });
+    });
+    return out;
+  }
+
+  $('invAddPlant').onclick = function () {
+    var tr = plantRow({ species: '', de: '', habit: 'bushy', height: 300, dia: 250, spacing: 250, companions: [], avoid: [], care: { en: {}, de: {} } });
+    $('invPlants').appendChild(tr);
+    tr.querySelector('[data-f=species]').focus();
+  };
+  $('invPlantReset').onclick = function () {
+    if (confirm(t('inv.confirmPlantReset'))) { PlantDB.reset(); renderPlantCatalog(); }
+  };
+
   $('btnInventory').onclick = function () {
     renderInventory(Inventory.get());
+    var garden = appMode === 'garden';
+    document.querySelectorAll('#inventoryModal .gardenOnly').forEach(function (el) { el.classList.toggle('hidden', !garden); });
+    if (garden) renderPlantCatalog();
     $('inventoryModal').classList.remove('hidden');
   };
   $('invCancel').onclick = function () { $('inventoryModal').classList.add('hidden'); };
@@ -895,6 +1260,12 @@
   $('invSave').onclick = function () {
     var inv = collectInventory();
     Inventory.save(inv);
+    // Plant catalog rows exist only after the table was rendered (garden mode).
+    if ($('invPlants').querySelector('tr.invRow')) {
+      var saved = PlantDB.save(collectPlantCatalog());
+      renderPlantsTab(); renderCareTab();          // catalog-resolved care may have changed
+      addMsg('sys', t('inv.savedPlants', { n: saved.length }));
+    }
     $('inventoryModal').classList.add('hidden');
     addMsg('sys', t('inv.saved', { p: inv.parts.length, c: inv.cuts.length }));
   };
@@ -920,6 +1291,7 @@
             currentRecordId = rec.id;
             chatHistory = rec.chat || [];
             setDesign(rec.design, rec.name);
+            sampleLoaded = null;
             dirty = false;
             resetHistory();
             renderChatHistory();
@@ -969,6 +1341,11 @@
     $('setRepair').checked = s.autoRepair !== false;
     $('setVision').checked = !!s.visionReview;
     $('setVisionEP').value = s.visionEndpoint || '';
+    $('setPlantStyle').value = s.plantStyle || 'primitives';
+    $('setBlender').checked = !!s.blenderBridge;
+    $('setBlenderURL').value = s.blenderURL || 'http://127.0.0.1:8800';
+    $('blenderOpts').classList.toggle('hidden', !s.blenderBridge);
+    $('setBlenderResult').textContent = '';
     $('setAframe').value = s.aframeVersion;
     $('setLang').value = s.language || I18n.getLang();
     $('setTestResult').textContent = '';
@@ -988,17 +1365,49 @@
       twoPass: $('setTwoPass').checked,
       autoRepair: $('setRepair').checked,
       visionReview: $('setVision').checked,
-      visionEndpoint: $('setVisionEP').value.trim()
+      visionEndpoint: $('setVisionEP').value.trim(),
+      plantStyle: $('setPlantStyle').value,
+      blenderBridge: $('setBlender').checked,
+      blenderURL: $('setBlenderURL').value.trim() || 'http://127.0.0.1:8800'
     };
   }
 
+  // Show the Blender requirements/instructions as soon as the option is ticked.
+  $('setBlender').onchange = function () {
+    $('blenderOpts').classList.toggle('hidden', !this.checked);
+  };
+  $('setBlenderTest').onclick = function () {
+    $('setBlenderResult').textContent = t('set.testing');
+    var saved = localStorage.getItem('diyw_settings');
+    LLM.saveSettings(collectSettings());
+    Blender.health().then(function (h) {
+      $('setBlenderResult').textContent = t('set.blenderOk', { v: h.blender });
+    }).catch(function (e) {
+      $('setBlenderResult').textContent = '✖ ' + e.message;
+      if (saved) localStorage.setItem('diyw_settings', saved);
+    });
+  };
+
   $('setSaveBtn').onclick = function () {
-    var prevVer = LLM.settings().aframeVersion;
+    var prev = LLM.settings();
+    var prevVer = prev.aframeVersion;
     var s = collectSettings();
     LLM.saveSettings(s);
     $('settingsModal').classList.add('hidden');
     switchLanguage(s.language);
     testConn();
+    if (s.plantStyle !== prev.plantStyle && currentDesign && (currentDesign.plants || []).length) {
+      Viewer.refreshPlants();
+    }
+    updateBridgeUI();
+    if (s.blenderBridge && !prev.blenderBridge) {
+      // Just enabled: check the bridge and tell the user what is still needed.
+      Blender.health().then(function (h) {
+        addMsg('sys', t('msg.blenderOn', { v: h.blender }));
+      }).catch(function () {
+        addMsg('sys', t('msg.blenderMissing'));
+      });
+    }
     if (s.aframeVersion !== prevVer) {
       // User already confirmed the reload — don't let the unsaved-changes guard block it too.
       if (confirm(t('set.reload'))) { dirty = false; location.reload(); }
@@ -1022,10 +1431,10 @@
   function testConn() {
     LLM.testConnection().then(function (r) {
       $('connDot').className = 'dot ok';
-      $('connDot').title = 'AI connected' + (r.models.length ? ' — ' + r.models[0] : '');
+      $('connDot').title = t('tip.connOk', { m: r.models[0] || '—' });
     }).catch(function (e) {
       $('connDot').className = 'dot err';
-      $('connDot').title = 'AI not reachable: ' + e.message;
+      $('connDot').title = t('tip.connErr', { e: e.message });
     });
   }
 
@@ -1055,6 +1464,21 @@
     if (currentDesign.finishing.length) {
       h += '<h2>' + t('print.finishing') + '</h2>';
       currentDesign.finishing.forEach(function (f) { h += '<p><b>' + f.step + '. ' + esc(f.title) + '</b><br>' + esc(f.instruction) + '</p>'; });
+    }
+    if ((currentDesign.plants || []).length) {
+      var pg = plantGroups();
+      h += '<h2>' + t('print.plants') + '</h2><table><tr><th>' + t('pl.qty') + '</th><th>' + t('pl.species') + '</th><th>' +
+        t('pl.spacing') + '</th><th>' + t('pl.companions') + '</th><th>' + t('pl.avoid') + '</th></tr>';
+      pg.forEach(function (g) {
+        h += '<tr><td>' + g.qty + '</td><td>' + esc(spLabel(g.species)) + '</td><td>' + Math.round(g.sample.spacing) + ' mm</td><td>' +
+          esc(spList(g.sample.companions) || '—') + '</td><td>' + esc(spList(g.sample.avoid) || '—') + '</td></tr>';
+      });
+      h += '</table><h2>' + t('print.care') + '</h2>';
+      pg.forEach(function (g) {
+        var p = g.sample, rows = '', care = Garden.resolveCare(p);
+        CARE_ROWS.forEach(function (f) { if (care[f[0]]) rows += '• ' + t(f[2]) + ': ' + esc(care[f[0]]) + '<br>'; });
+        h += '<p><b>' + esc(spLabel(p.species)) + '</b> (' + g.qty + '×)<br>' + rows + '</p>';
+      });
     }
     if (lastPlan) h += Optimizer.renderHTML(lastPlan, t);
     d.innerHTML = h;
