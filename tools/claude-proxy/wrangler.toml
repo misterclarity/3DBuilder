@@ -31,5 +31,8 @@ EFFORT = "high"
 # your Anthropic Console workspace spend limit / prepaid credits.
 DAILY_LIMIT = "400"
 
-# Upper bound for max_tokens forwarded to the API.
-MAX_TOKENS_CAP = "64000"
+# Upper bound for max_tokens forwarded to the API for thinking models (Opus/
+# Sonnet support 128K output). It is a ceiling shared by thinking + JSON output;
+# generous headroom prevents complex designs from truncating mid-JSON. The model
+# stops when done, so this does not force longer (or costlier) normal designs.
+MAX_TOKENS_CAP = "128000"

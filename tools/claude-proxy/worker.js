@@ -96,11 +96,14 @@ export function toAnthropicRequest(body, env) {
     messages.unshift({ role: 'user', content: [{ type: 'text', text: '(continue)' }] });
   }
 
-  const cap = Number(env.MAX_TOKENS_CAP) || 64000;
   const adaptive = supportsAdaptive(model);
-  // With thinking on, part of the budget is spent reasoning before the JSON is
-  // written — floor the output budget higher so complex designs don't truncate.
-  const floor = adaptive ? 32000 : 16384;
+  // max_tokens is the budget for thinking AND the JSON output combined. With
+  // thinking on, complex designs truncate if the ceiling is too low. Give
+  // adaptive models (Opus/Sonnet, 128K output) generous room — this is only a
+  // ceiling; the model stops at end_turn when the design is done, so normal
+  // designs cost/take no more. Haiku 4.5 maxes at 64K output, so clamp it.
+  const cap = adaptive ? (Number(env.MAX_TOKENS_CAP) || 128000) : 60000;
+  const floor = adaptive ? 64000 : 16384;
   const req = {
     model: model,
     max_tokens: Math.min(cap, Math.max(Number(body.max_tokens) || 16384, floor)),
