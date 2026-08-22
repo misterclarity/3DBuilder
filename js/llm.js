@@ -4,7 +4,7 @@
 
   /* Demo-link bootstrap: ?endpoint=…&model=…&lang=…&vision=1 preseed the settings
    * so a single shared URL works with zero setup (e.g. pointing at the Claude
-   * proxy: ?endpoint=https://….workers.dev/t/TOKEN&model=claude-opus-4-8&vision=1).
+   * proxy: ?endpoint=https://….workers.dev/t/TOKEN&model=claude-opus-5&vision=1).
    * vision=1 turns on the AI visual review — worthwhile with Claude, which reads
    * the rendered images well; the same model does the critique via the proxy. */
   try {
@@ -54,6 +54,10 @@
 
   // Cache the auto-detected model per endpoint for 5 minutes.
   var modelCache = {};
+  var reqSeq = 0; // per-request id so concurrent/streamed calls are distinguishable in logs
+
+  // Lightweight logger → the in-app Debug console (🐞). No-ops if Debug is absent.
+  function dbg(level, msg) { try { if (window.Debug) window.Debug.log(level, 'llm', msg); } catch (e) {} }
 
   /* Resolve which model to send for an endpoint: the configured one, or (auto)
    * the first model that endpoint is currently serving. Resolves to '' if
@@ -97,6 +101,10 @@
     var ctrl = new AbortController();
     var useRF = !!opts.responseSchema && s.strictJson !== 'off' &&
                 !(s.strictJson === 'auto' && rfBlocked[ep]);
+    var reqId = 'r' + (++reqSeq);
+    var payloadChars = 0;
+    try { payloadChars = JSON.stringify(messages).length; } catch (e) {}
+    var t0 = Date.now();
 
     function doFetch(model, withRF) {
       var body = { messages: messages, stream: true };
@@ -105,6 +113,9 @@
       if (s.temperature !== '' && isFinite(Number(s.temperature))) body.temperature = Number(s.temperature);
       if (s.maxTokens !== '' && isFinite(Number(s.maxTokens))) body.max_tokens = Number(s.maxTokens);
       if (withRF) body.response_format = { type: 'json_schema', json_schema: { name: 'envelope', schema: opts.responseSchema } };
+      dbg('info', reqId + ' → POST ' + ep + '/chat/completions  model=' + (model || 'auto') +
+        ' msgs=' + messages.length + ' prompt≈' + payloadChars + 'ch' +
+        (body.max_tokens ? ' max_tokens=' + body.max_tokens : '') + (withRF ? ' response_format=json_schema' : ''));
       return fetch(ep.replace(/\/+$/, '') + '/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -118,41 +129,72 @@
         if (!res.ok && useRF && s.strictJson === 'auto') {
           // Server likely doesn't support response_format — remember and retry once without.
           rfBlocked[ep] = true;
-          if (window.Debug) Debug.log('warn', 'llm', 'response_format rejected (HTTP ' + res.status + '), retrying without. Strict JSON disabled for this endpoint.');
+          dbg('warn', reqId + ' response_format rejected (HTTP ' + res.status + '), retrying without. Strict JSON disabled for this endpoint.');
           return doFetch(model, false);
         }
         return res;
       });
     }).then(function (res) {
       if (!res.ok) {
+        // Log the full-ish server body (llama.cpp puts the real cause here, e.g.
+        // "the request exceeds the available context size") — UI gets a shorter slice.
         return res.text().then(function (t) {
-          throw new Error('LLM server error ' + res.status + ': ' + t.slice(0, 300));
+          dbg('error', reqId + ' ✖ HTTP ' + res.status + ' from server: ' + t.slice(0, 1500));
+          throw new Error('LLM server error ' + res.status + ': ' + t.slice(0, 400));
         });
       }
       var reader = res.body.getReader();
       var decoder = new TextDecoder();
-      var buf = '', full = '';
+      var buf = '', full = '', finishReason = '', chunks = 0, badLines = 0;
+      function finalize(reason) {
+        var trunc = finishReason === 'length';
+        dbg(full ? (trunc ? 'warn' : 'info') : 'error',
+          reqId + ' ' + (full ? '✓' : '✖') + ' done (' + reason + ', ' + (Date.now() - t0) + 'ms): ' +
+          full.length + 'ch, ' + chunks + ' delta chunks' +
+          (finishReason ? ', finish_reason=' + finishReason : '') +
+          (badLines ? ', ' + badLines + ' unparsable lines' : '') +
+          (trunc ? '  ⚠ TRUNCATED — raise the server context (llama-server -c) or lower max_tokens in ⚙ Settings' : '') +
+          (full ? '' : '  ⚠ EMPTY response — server sent no content'));
+        return full;
+      }
       function pump() {
         return reader.read().then(function (r) {
-          if (r.done) return full;
+          if (r.done) return finalize('stream end');
           buf += decoder.decode(r.value, { stream: true });
           var lines = buf.split('\n');
           buf = lines.pop();
           for (var i = 0; i < lines.length; i++) {
             var line = lines[i].trim();
-            if (!line.startsWith('data:')) continue;
+            if (!line || line.charAt(0) === ':') continue; // blank line or SSE keep-alive comment
+            if (line.indexOf('data:') !== 0) continue;
             var data = line.slice(5).trim();
-            if (data === '[DONE]') return full;
-            try {
-              var j = JSON.parse(data);
-              var delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
-              if (delta) { full += delta; if (onDelta) onDelta(delta, full); }
-            } catch (e) { /* partial line, ignore */ }
+            if (data === '[DONE]') return finalize('[DONE]');
+            var j;
+            try { j = JSON.parse(data); }
+            catch (e) { badLines++; continue; } // genuinely malformed complete line (buffer holds partials)
+            // Some OpenAI-compatible servers stream an error object instead of a delta.
+            if (j.error) {
+              var em = (j.error && (j.error.message || j.error)) || 'unknown stream error';
+              dbg('error', reqId + ' ✖ stream error after ' + full.length + 'ch: ' + em);
+              throw new Error('LLM stream error: ' + em);
+            }
+            var ch = j.choices && j.choices[0];
+            if (ch) {
+              if (ch.finish_reason) finishReason = ch.finish_reason;
+              var delta = ch.delta && ch.delta.content;
+              if (delta) { chunks++; full += delta; if (onDelta) onDelta(delta, full); }
+            }
           }
           return pump();
         });
       }
       return pump();
+    });
+    // Side-branch for logging only — the original `promise` is still returned and
+    // handled by callers, so this does not swallow the rejection from them.
+    promise.catch(function (err) {
+      if (err && err.name === 'AbortError') dbg('info', reqId + ' aborted by user');
+      else dbg('error', reqId + ' ✖ request failed: ' + (err && err.message || err));
     });
     return { promise: promise, abort: function () { ctrl.abort(); } };
   }

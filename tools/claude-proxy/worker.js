@@ -28,16 +28,17 @@ const ANTHROPIC_VERSION = '2023-06-01';
 let counter = { day: '', n: 0 };
 
 function modelList(env) {
-  return String(env.MODELS || 'claude-opus-4-8,claude-sonnet-5,claude-haiku-4-5')
+  return String(env.MODELS || 'claude-opus-5,claude-opus-4-8,claude-sonnet-5,claude-haiku-4-5')
     .split(',').map(function (s) { return s.trim(); }).filter(Boolean);
 }
 
-// Models that take adaptive thinking + output_config.effort (Opus 4.6+, Sonnet
-// 4.6/5, Fable/Mythos 5). Haiku 4.5 and older reject those params (400), so we
-// send them plain. This is THE lever that makes Claude reason before answering;
-// without it Opus runs in its weakest no-thinking mode.
+// Models that take adaptive thinking + output_config.effort (Opus 5, Opus 4.6+,
+// Sonnet 4.6/5, Fable/Mythos 5). Haiku 4.5 and older reject those params (400),
+// so we send them plain. This is THE lever that makes Claude reason before
+// answering; without it Opus runs in its weakest no-thinking mode AND gets
+// clamped to the low token cap below (truncating complex designs mid-JSON).
 export function supportsAdaptive(model) {
-  return /opus-4-[678]|sonnet-(5|4-6)|fable-5|mythos-5/.test(String(model));
+  return /opus-5|opus-4-[678]|sonnet-(5|4-6)|fable-5|mythos-5/.test(String(model));
 }
 
 function corsHeaders(env) {

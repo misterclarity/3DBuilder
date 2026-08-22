@@ -20,7 +20,7 @@ compatibility_date = "2026-01-01"
 ALLOWED_ORIGIN = ""
 
 # Models offered in the app's model dropdown; first entry is the default.
-MODELS = "claude-opus-4-8,claude-sonnet-5,claude-haiku-4-5"
+MODELS = "claude-opus-5,claude-opus-4-8,claude-sonnet-5,claude-haiku-4-5"
 
 # Reasoning depth for Opus/Sonnet: low | medium | high | xhigh | max.
 # "high" is a strong, snappy default. Raise to "xhigh" for the best design
