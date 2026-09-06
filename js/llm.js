@@ -107,6 +107,24 @@
     try { payloadChars = JSON.stringify(messages).length; } catch (e) {}
     var t0 = Date.now();
 
+    /* Stream telemetry. Without it a stalled request is indistinguishable from
+     * an unreachable server: both end as a bare fetch "network error" minutes
+     * later. tHeaders is the giveaway — if it never gets set, nothing ever came
+     * back from the endpoint. */
+    var tHeaders = 0, tFirstByte = 0, lastByteAt = t0;
+    var contentChars = 0, reasoningChars = 0, reasoningChunks = 0;
+    function state() {
+      return (tHeaders ? 'headers after ' + tHeaders + 'ms' : 'NO response headers') +
+        (tFirstByte ? ', first byte after ' + tFirstByte + 'ms' : ', no bytes received') +
+        ', ' + contentChars + 'ch content, ' + reasoningChars + 'ch reasoning, idle ' +
+        Math.round((Date.now() - lastByteAt) / 1000) + 's';
+    }
+    // Heartbeat: say something every 30s of silence instead of looking hung.
+    var watch = setInterval(function () {
+      if (Date.now() - lastByteAt >= 30000) dbg('warn', reqId + ' … still waiting — ' + state());
+    }, 30000);
+    function stopWatch() { if (watch) { clearInterval(watch); watch = 0; } }
+
     function doFetch(model, withRF) {
       var body = { messages: messages, stream: true };
       if (model) body.model = model;
@@ -128,6 +146,11 @@
         headers: { 'Content-Type': 'application/json' },
         signal: ctrl.signal,
         body: JSON.stringify(body)
+      }).then(function (res) {
+        tHeaders = Date.now() - t0;
+        lastByteAt = Date.now();
+        dbg(res.ok ? 'info' : 'warn', reqId + ' ← HTTP ' + res.status + ' headers after ' + tHeaders + 'ms');
+        return res;
       });
     }
 
@@ -158,18 +181,27 @@
       var buf = '', full = '', finishReason = '', chunks = 0, badLines = 0;
       function finalize(reason) {
         var trunc = finishReason === 'length';
+        stopWatch();
         dbg(full ? (trunc ? 'warn' : 'info') : 'error',
           reqId + ' ' + (full ? '✓' : '✖') + ' done (' + reason + ', ' + (Date.now() - t0) + 'ms): ' +
           full.length + 'ch, ' + chunks + ' delta chunks' +
+          (reasoningChars ? ', ' + reasoningChars + 'ch reasoning in ' + reasoningChunks + ' chunks' : '') +
           (finishReason ? ', finish_reason=' + finishReason : '') +
           (badLines ? ', ' + badLines + ' unparsable lines' : '') +
           (trunc ? '  ⚠ TRUNCATED — raise the server context (llama-server -c) or lower max_tokens in ⚙ Settings' : '') +
-          (full ? '' : '  ⚠ EMPTY response — server sent no content'));
+          (full ? '' : (reasoningChars
+            ? '  ⚠ REASONING ONLY — the model thought for ' + reasoningChars + ' characters and never produced an answer. Its thinking budget is not being applied; check which parameter your server expects.'
+            : '  ⚠ EMPTY response — server sent no content')));
         return full;
       }
       function pump() {
         return reader.read().then(function (r) {
           if (r.done) return finalize('stream end');
+          lastByteAt = Date.now();
+          if (!tFirstByte) {
+            tFirstByte = lastByteAt - t0;
+            dbg('info', reqId + ' ← first bytes after ' + tFirstByte + 'ms — the server is answering');
+          }
           buf += decoder.decode(r.value, { stream: true });
           var lines = buf.split('\n');
           buf = lines.pop();
@@ -192,7 +224,19 @@
             if (ch) {
               if (ch.finish_reason) finishReason = ch.finish_reason;
               var delta = ch.delta && ch.delta.content;
-              if (delta) { chunks++; full += delta; if (onDelta) onDelta(delta, full); }
+              if (delta) { chunks++; full += delta; contentChars = full.length; if (onDelta) onDelta(delta, full); }
+              /* Reasoning models stream their thinking in a separate field
+               * (llama.cpp/vLLM: reasoning_content, some gateways: reasoning).
+               * It must never join `full` — it is not part of the JSON answer —
+               * but ignoring it silently makes a long thinking phase look like a
+               * dead connection, which is exactly what it looked like. */
+              var rdelta = ch.delta && (ch.delta.reasoning_content || ch.delta.reasoning);
+              if (rdelta) {
+                reasoningChunks++;
+                reasoningChars += rdelta.length;
+                if (reasoningChunks === 1) dbg('info', reqId + ' ← model is thinking (reasoning tokens stream separately; they are not part of the answer)');
+                if (opts.onReasoning) opts.onReasoning(rdelta, reasoningChars);
+              }
             }
           }
           return pump();
@@ -202,9 +246,14 @@
     });
     // Side-branch for logging only — the original `promise` is still returned and
     // handled by callers, so this does not swallow the rejection from them.
-    promise.catch(function (err) {
-      if (err && err.name === 'AbortError') dbg('info', reqId + ' aborted by user');
-      else dbg('error', reqId + ' ✖ request failed: ' + (err && err.message || err));
+    promise.then(stopWatch, function (err) {
+      stopWatch();
+      if (err && err.name === 'AbortError') { dbg('info', reqId + ' aborted by user after ' + (Date.now() - t0) + 'ms'); return; }
+      dbg('error', reqId + ' ✖ request failed after ' + (Date.now() - t0) + 'ms: ' + (err && err.message || err) +
+        ' — ' + state() +
+        (!tHeaders
+          ? '  ⚠ Nothing came back from the endpoint at all. A browser "network error" here means the request never got an answer: tunnel/VPN down (Tailscale not connected on this device), wrong host/port, or CORS. The LLM server will have no record of it.'
+          : '  ⚠ The connection was accepted and then died mid-stream — an idle timeout in a reverse proxy/tunnel, the phone dropping the socket, or the server stopping. Compare the idle time above with the proxy read timeout.'));
     });
     return { promise: promise, abort: function () { ctrl.abort(); } };
   }

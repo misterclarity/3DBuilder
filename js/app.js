@@ -324,7 +324,7 @@
     thinking.textContent = t('chat.planning');
     activeReq = LLM.chat(Prompts.buildPlanMessages(hist, currentDesign, selectedIds, text, appMode), function (_d, full) {
       thinking.textContent = t('chat.planning') + ' (' + full.length + ')';
-    });
+    }, { onReasoning: function (_d, chars) { thinking.textContent = t('chat.thinking') + ' (' + chars + ')'; } });
     activeReq.promise.then(function (full) {
       var env = LLM.extractJSON(full);
       if (env && (env.type === 'clarify' || env.type === 'chat')) {
@@ -347,7 +347,8 @@
     var msgs = Prompts.buildMessages(hist, currentDesign, selectedIds, text, plan, appMode);
     activeReq = LLM.chat(msgs, function (_d, full) {
       thinking.textContent = t('chat.designing') + ' (' + full.length + ')';
-    }, { responseSchema: Schema.ENVELOPE });
+    }, { responseSchema: Schema.ENVELOPE,
+         onReasoning: function (_d, chars) { thinking.textContent = t('chat.thinking') + ' (' + chars + ')'; } });
     activeReq.promise.then(function (full) {
       finishReq();
       thinking.remove();

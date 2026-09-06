@@ -30,6 +30,8 @@ Any OpenAI-compatible endpoint works. Default: `http://100.119.213.123:8080/v1`,
 
 Reasoning models get a thinking budget: every chat request carries `"reasoning_budget_tokens": 2000` (⚙ Settings → *Reasoning budget*). Change the number there, or clear the field to stop sending the parameter altogether — servers that don't know it normally ignore it, but a strict one may reject the request (the 🐞 debug console says so when it does). The Claude proxy drops the parameter and uses adaptive thinking instead.
 
+While a reasoning model thinks, its thinking tokens arrive in a separate stream field (`reasoning_content`) that is never part of the answer — the chat shows *Thinking (n)* so a long thinking phase is visibly alive, and the 🐞 debug console logs when response headers arrive, when the first byte lands, and every 30 s of silence. If a request fails, the log says whether the endpoint answered at all: nothing at all means the request never arrived (tunnel/VPN, host/port, CORS); headers-then-silence means the connection died mid-stream (proxy idle timeout).
+
 ### Demo with Claude (share a link that just works)
 
 To showcase the app powered by Claude — billed to your Anthropic account, with nothing for the visitor to set up — deploy the included proxy, which keeps your API key server-side:
