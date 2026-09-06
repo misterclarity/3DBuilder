@@ -127,7 +127,9 @@ export function toAnthropicRequest(body, env) {
   }
   // Deliberately dropped: temperature/top_p/top_k (rejected by Opus 4.8 /
   // Sonnet 5), response_format (llama.cpp grammar feature; Claude's JSON
-  // discipline + the app's extraction/repair path handle it).
+  // discipline + the app's extraction/repair path handle it), and
+  // reasoning_budget_tokens (a local-server knob; adaptive thinking above is
+  // Claude's equivalent, and fixed thinking budgets are rejected outright).
   return req;
 }
 

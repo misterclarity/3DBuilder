@@ -1336,6 +1336,7 @@
     populateModels(s.model);
     $('setTemp').value = s.temperature;
     $('setMaxTok').value = s.maxTokens;
+    $('setReasoning').value = s.reasoningBudgetTokens;
     $('setStrict').value = s.strictJson || 'auto';
     $('setTwoPass').checked = s.twoPass !== false;
     $('setRepair').checked = s.autoRepair !== false;
@@ -1359,6 +1360,7 @@
       model: $('setModel').value,
       temperature: $('setTemp').value.trim() === '' ? '' : (Number($('setTemp').value) || 0.4),
       maxTokens: $('setMaxTok').value.trim() === '' ? '' : (Number($('setMaxTok').value) || 16384),
+      reasoningBudgetTokens: $('setReasoning').value.trim() === '' ? '' : (Number($('setReasoning').value) || 0),
       aframeVersion: $('setAframe').value.trim() || '1.8.0',
       language: $('setLang').value,
       strictJson: $('setStrict').value,

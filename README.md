@@ -28,6 +28,8 @@ A static web app for designing DIY (mainly wood) projects with a local AI. Descr
 
 Any OpenAI-compatible endpoint works. Default: `http://100.119.213.123:8080/v1`, model `qwen3.6-27b-mtp` (change in ⚙ Settings). The server must allow CORS (llama.cpp `llama-server` does by default).
 
+Reasoning models get a thinking budget: every chat request carries `"reasoning_budget_tokens": 2000` (⚙ Settings → *Reasoning budget*). Change the number there, or clear the field to stop sending the parameter altogether — servers that don't know it normally ignore it, but a strict one may reject the request (the 🐞 debug console says so when it does). The Claude proxy drops the parameter and uses adaptive thinking instead.
+
 ### Demo with Claude (share a link that just works)
 
 To showcase the app powered by Claude — billed to your Anthropic account, with nothing for the visitor to set up — deploy the included proxy, which keeps your API key server-side:

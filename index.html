@@ -134,6 +134,9 @@
       <label data-i18n-title="tip.setTemp"><span data-i18n="set.temp">Temperature</span> <input id="setTemp" type="number" step="0.1" min="0" max="2"></label>
       <label data-i18n-title="tip.setMaxTok"><span data-i18n="set.maxtok">Max tokens</span> <input id="setMaxTok" type="number" step="512" min="1024"></label>
     </div>
+    <label data-i18n-title="tip.setReasoning"><span data-i18n="set.reasoning">Reasoning budget (tokens)</span>
+      <input id="setReasoning" type="number" step="500" min="0" placeholder="2000">
+    </label>
     <small data-i18n="set.llmNote">Sent with each request — they override the llama.cpp/server defaults. Leave empty to use the server's settings.</small>
     <label data-i18n-title="tip.setStrict"><span data-i18n="set.strict">Strict JSON output (response_format json_schema)</span>
       <select id="setStrict">

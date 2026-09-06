@@ -27,6 +27,7 @@
     model: '', // '' = auto: use whatever model the server reports on /models
     temperature: 0.4,
     maxTokens: 16384,
+    reasoningBudgetTokens: 2000, // thinking budget sent as reasoning_budget_tokens ('' = omit)
     aframeVersion: '1.8.0',
     language: 'en',
     strictJson: 'auto', // 'auto' | 'on' | 'off' — send response_format json_schema (grammar-constrained output)
@@ -44,9 +45,9 @@
     try { s = JSON.parse(localStorage.getItem('diyw_settings') || '{}'); } catch (e) { s = {}; }
     var out = {};
     Object.keys(DEFAULTS).forEach(function (k) {
-      // Empty temperature/maxTokens mean "omit from requests, use the server's defaults".
-      // Empty model means "auto — resolve from the server's /models list".
-      if ((k === 'temperature' || k === 'maxTokens' || k === 'model') && s[k] === '') { out[k] = ''; return; }
+      // Empty temperature/maxTokens/reasoningBudgetTokens mean "omit from requests,
+      // use the server's defaults". Empty model means "auto — resolve from /models".
+      if ((k === 'temperature' || k === 'maxTokens' || k === 'reasoningBudgetTokens' || k === 'model') && s[k] === '') { out[k] = ''; return; }
       out[k] = (s[k] !== undefined && s[k] !== '') ? s[k] : DEFAULTS[k];
     });
     return out;
@@ -112,10 +113,16 @@
       // Only send sampling params that are explicitly set; otherwise the server defaults apply.
       if (s.temperature !== '' && isFinite(Number(s.temperature))) body.temperature = Number(s.temperature);
       if (s.maxTokens !== '' && isFinite(Number(s.maxTokens))) body.max_tokens = Number(s.maxTokens);
+      // Thinking budget for reasoning models (qwen3 & co). Sent on every request;
+      // clear the field in ⚙ Settings for servers that reject the parameter.
+      if (s.reasoningBudgetTokens !== '' && isFinite(Number(s.reasoningBudgetTokens)))
+        body.reasoning_budget_tokens = Number(s.reasoningBudgetTokens);
       if (withRF) body.response_format = { type: 'json_schema', json_schema: { name: 'envelope', schema: opts.responseSchema } };
       dbg('info', reqId + ' → POST ' + ep + '/chat/completions  model=' + (model || 'auto') +
         ' msgs=' + messages.length + ' prompt≈' + payloadChars + 'ch' +
-        (body.max_tokens ? ' max_tokens=' + body.max_tokens : '') + (withRF ? ' response_format=json_schema' : ''));
+        (body.max_tokens ? ' max_tokens=' + body.max_tokens : '') +
+        (body.reasoning_budget_tokens !== undefined ? ' reasoning_budget_tokens=' + body.reasoning_budget_tokens : '') +
+        (withRF ? ' response_format=json_schema' : ''));
       return fetch(ep.replace(/\/+$/, '') + '/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -139,7 +146,10 @@
         // Log the full-ish server body (llama.cpp puts the real cause here, e.g.
         // "the request exceeds the available context size") — UI gets a shorter slice.
         return res.text().then(function (t) {
-          dbg('error', reqId + ' ✖ HTTP ' + res.status + ' from server: ' + t.slice(0, 1500));
+          dbg('error', reqId + ' ✖ HTTP ' + res.status + ' from server: ' + t.slice(0, 1500) +
+            (res.status === 400 && /reasoning_budget_tokens/.test(t)
+              ? '  ⚠ This server rejects reasoning_budget_tokens — clear the reasoning budget field in ⚙ Settings.'
+              : ''));
           throw new Error('LLM server error ' + res.status + ': ' + t.slice(0, 400));
         });
       }
