@@ -59,7 +59,7 @@ chatmock serve --port 8111 --reasoning-effort high
 
 | Field | Value | Why |
 |---|---|---|
-| **AI endpoint** | `http://127.0.0.1:8111/v1` | The bridge's OpenAI base URL. |
+| **AI endpoint** | `http://127.0.0.1:8111/v1` | The bridge's OpenAI base URL — but see step 4: from another device this must be the tailnet address, not loopback. |
 | **Model** | *Auto*, or e.g. `gpt-5.6-sol` | Auto reads `/models` from the bridge. |
 | **Reasoning budget** | *clear the field* | `reasoning_budget_tokens` is a llama.cpp knob. Use `--reasoning-effort` on the bridge instead; a strict server rejects the parameter outright. |
 | **Temperature** | *clear the field* | GPT-5-class reasoning models reject a non-default temperature. Empty = don't send it. |
@@ -68,60 +68,68 @@ chatmock serve --port 8111 --reasoning-effort high
 Leave *Two-stage design* and *Auto-fix geometry* on — they are plain extra
 round-trips and work unchanged.
 
-### 4. Close the HTTPS/HTTP gap
+### 4. Choose where the app is served from
 
-The bridge is plain HTTP. Pick one of the two paths below depending on where
-the app itself is served from.
+All three paths need CORS (see below). They differ only in whether the browser
+also blocks the call as **mixed content** — an HTTPS page may not call a plain
+HTTP endpoint, and that is browser policy with no server-side fix. Keeping both
+sides HTTP avoids it entirely.
 
-#### Path A — everything local (simplest)
-
-Serve the app over HTTP too, so there is no mixed content at all:
-
-```bash
-python -m http.server 8000      # in the repo root, NOT port 8111
-```
-
-Then open `http://localhost:8000`. This is the path to start on — it has the
-fewest moving parts, and it is the one to use when something does not work,
-to rule the transport out.
-
-#### Path B — app on GitHub Pages
-
-**A GitHub Pages site cannot talk to `http://127.0.0.1` directly.** Pages is
-HTTPS, so the call is blocked as mixed content; Chrome additionally requires a
-[Private Network Access][pna] preflight that the bridge does not answer. Do not
-expect the loopback address to work from the deployed site — the bridge has to
-be reachable over HTTPS.
-
-With Tailscale (same approach the main README suggests for llama.cpp):
+#### Path A — same machine
 
 ```bash
-tailscale cert                        # once, for this machine
-tailscale serve --bg 8111             # publish the bridge over HTTPS
+python -m http.server 8000      # repo root, NOT port 8111
 ```
 
-Put the resulting `https://<host>.<tailnet>.ts.net` URL (plus `/v1`) in
-⚙ Settings instead of the loopback address. Both sides are then HTTPS, which
-clears the mixed-content block.
+Open `http://localhost:8000`; endpoint stays `http://127.0.0.1:8111/v1`. Start
+here — fewest moving parts, and the baseline for ruling out the transport when
+something else fails.
 
-One thing left to verify on this path: the call is now **cross-origin**
-(`github.io` → `ts.net`), so the bridge must answer with permissive CORS
-headers. llama.cpp's `llama-server` does by default; whether ChatMock does is
-untested here. If *Test connection* fails on Path B while Path A works, CORS is
-the first thing to check — the browser console names it explicitly, and the
-🐞 console will show the request as never having been answered.
+#### Path B — another device on the tailnet (recommended)
+
+Phone or laptop opening the app served from the machine that runs the bridge.
+Both sides stay HTTP, so there is no mixed content and no certificate to issue;
+tailnet traffic is WireGuard-encrypted at the network layer already.
+
+Bind **both** servers to all interfaces — loopback-only defaults are reachable
+from that machine and nowhere else:
+
+```bash
+python -m http.server 8000 --bind 0.0.0.0
+chatmock serve --port 8111 --host 0.0.0.0 --reasoning-effort high
+```
+
+> Check `chatmock serve --help` for the exact host flag; the spelling varies
+> between bridges.
+
+Then on the other device open `http://<host>.<tailnet>.ts.net:8000`, and set the
+endpoint to `http://<host>.<tailnet>.ts.net:8111/v1`. **Not `127.0.0.1`** —
+settings live in the viewing device's `localStorage`, where loopback means that
+device itself, not the machine running the bridge.
+
+#### Path C — app on GitHub Pages
+
+Needs the bridge on HTTPS: a Pages site cannot call `http://127.0.0.1` at all
+(mixed content, plus Chrome wants a [Private Network Access][pna] preflight the
+bridge does not answer). `tailscale cert` + `tailscale serve --bg 8111` gets an
+`https://…ts.net` URL that works. Path B is simpler for testing; this one is
+only worth it to demo from the deployed site.
 
 > **The bridge has no authentication.** Anything that can reach it spends your
-> ChatGPT quota, with no key required. On a tailnet that is your own devices,
-> which is the point of using Tailscale here. Do **not** publish it through a
-> public tunnel (Cloudflare Quick Tunnel, ngrok, `tailscale funnel`) — on a
-> Business plan that is an open, unauthenticated proxy to your company's
-> subscription. If you need a shareable endpoint, use an API key behind the
-> [`../claude-proxy`](../claude-proxy) pattern, which has a token and a daily
-> cap, rather than exposing this.
+> ChatGPT quota, with no key required. A tailnet is your own devices, which is
+> what makes Path B reasonable. Do **not** publish it through a public tunnel
+> (Cloudflare Quick Tunnel, ngrok, `tailscale funnel`) — on a Business plan that
+> is an open, unauthenticated proxy to your company's subscription. For a
+> shareable endpoint use an API key behind the
+> [`../claude-proxy`](../claude-proxy) pattern, which has a token and a daily cap.
 
-The remaining workarounds in the main
-[README](../../README.md#mixed-content-https-site--http-llm) also apply.
+#### CORS applies to all three
+
+The page and the bridge are always different origins — the port alone is enough,
+so `localhost:8000` → `127.0.0.1:8111` counts even on one machine. The bridge
+must return permissive CORS headers; `llama-server` does by default, and whether
+ChatMock does is untested here. A CORS failure looks like a request that was
+never answered in the 🐞 console, and the browser console names it outright.
 
 ## Checking it works
 

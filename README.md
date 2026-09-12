@@ -58,8 +58,9 @@ Both sides are HTTPS, so the mixed-content workaround below is not needed for th
 A ChatGPT **Business/Plus/Pro** seat includes Codex, and a local bridge can
 reuse that sign-in to serve an OpenAI-compatible API — so the app runs on GPT
 models with no API key. It needs **no changes to the app**: start the bridge,
-put its URL in ⚙ Settings. Simplest locally — from the **GitHub Pages** build the
-bridge has to be reachable over HTTPS (e.g. `tailscale serve`), since a Pages
+put its URL in ⚙ Settings. Serve the app over HTTP (locally, or to another
+device on your tailnet) and there is no mixed content to work around; only the
+**GitHub Pages** build needs the bridge republished over HTTPS, since a Pages
 site cannot call `http://127.0.0.1`. Setup, the settings that must be cleared,
 and the caveats (it is outside Codex's intended use, and can break without
 notice) are in [`tools/codex-bridge/README.md`](tools/codex-bridge/README.md).
