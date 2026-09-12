@@ -53,6 +53,15 @@ To showcase the app powered by Claude — billed to your Anthropic account, with
 
 Both sides are HTTPS, so the mixed-content workaround below is not needed for the demo. **Switching models** (e.g. Sonnet vs Opus): ⚙ Settings → Model lists everything from `MODELS`, or hand out links with different `&model=` values. The proxy streams, translates the app's OpenAI-style requests to the Anthropic Messages API, **enables adaptive thinking** on Opus/Sonnet (this is what makes Claude reason about the geometry before answering — without it the model runs in a weak no-thinking mode that's no better than a local model), caches the system prompt (≈90% cheaper repeat turns), strips parameters Claude rejects, and forwards the vision-review images so the visual critique runs on Claude too. Reasoning depth is the `EFFORT` var in `wrangler.toml` (`high` default; `xhigh` for the hardest designs, slower/costlier). After the demo, delete the worker (`npx wrangler delete`) or rotate the key, and the link goes dead.
 
+### Use a ChatGPT subscription instead of an API key
+
+A ChatGPT **Business/Plus/Pro** seat includes Codex, and a local bridge can
+reuse that sign-in to serve an OpenAI-compatible API — so the app runs on GPT
+models with no API key. It needs **no changes to the app**: start the bridge,
+put its URL in ⚙ Settings. Setup, the settings that must be cleared, and the
+caveats (it is outside Codex's intended use, and can break without notice) are
+in [`tools/codex-bridge/README.md`](tools/codex-bridge/README.md).
+
 ### Mixed content (HTTPS site → HTTP LLM)
 
 GitHub Pages is HTTPS; browsers block calls to a plain-HTTP endpoint. Options:
@@ -89,6 +98,7 @@ Built-in debug console: **🐞 button** in the top bar, `Ctrl+Shift+D`, or add `
 - `js/plantdb.js` — bilingual plant catalog (species data + care texts, EN/DE) the AI designs from
 - `js/blender.js` — client for the optional local Blender bridge
 - `tools/blender_bridge.py` — headless Blender HTTP service (renders, STL/GLB with boolean cutouts)
+- `tools/codex-bridge/` — notes for running the app off a ChatGPT subscription (docs only, no code)
 - `js/garden.js` — gardening module: sample vegetable garden, species labels, care resolution
 - `js/viewer.js` — A-Frame viewer: orbit camera, picking, explode, prep & assembly modes
 - `js/llm.js` — OpenAI-compatible streaming client + robust JSON extraction (handles `<think>` blocks)
