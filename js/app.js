@@ -1334,6 +1334,7 @@
   $('btnSettings').onclick = function () {
     var s = LLM.settings();
     $('setEndpoint').value = s.endpoint;
+    $('setKey').value = s.apiKey || '';
     populateModels(s.model);
     $('setTemp').value = s.temperature;
     $('setMaxTok').value = s.maxTokens;
@@ -1358,6 +1359,7 @@
   function collectSettings() {
     return {
       endpoint: $('setEndpoint').value.trim(),
+      apiKey: $('setKey').value.trim(),
       model: $('setModel').value,
       temperature: $('setTemp').value.trim() === '' ? '' : (Number($('setTemp').value) || 0.4),
       maxTokens: $('setMaxTok').value.trim() === '' ? '' : (Number($('setMaxTok').value) || 16384),

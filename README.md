@@ -65,6 +65,38 @@ site cannot call `http://127.0.0.1`. Setup, the settings that must be cleared,
 and the caveats (it is outside Codex's intended use, and can break without
 notice) are in [`tools/codex-bridge/README.md`](tools/codex-bridge/README.md).
 
+### Share your own LLM without sharing tailnet access
+
+⚙ Settings → **API key** sends an `Authorization: Bearer …` header with every
+request, so an endpoint you expose publicly can require a secret instead of
+relying on network reach. Empty = no header at all, so a local server started
+without a key keeps working unchanged.
+
+1. Start the server with a key you invent — any long random string:
+   ```bash
+   llama-server -m model.gguf --host 0.0.0.0 --api-key "$(openssl rand -hex 24)"
+   ```
+2. Put it behind HTTPS with a tunnel (Cloudflare Tunnel, ngrok, `tailscale
+   funnel`). The app is HTTPS on Pages, so the endpoint must be too.
+3. Share a link that preseeds both — `&key=` fills the field for them:
+   ```
+   https://<you>.github.io/<repo>/?endpoint=https://llm.example.com/v1&key=<KEY>&model=qwen3
+   ```
+
+The server must allow CORS **including the `Authorization` header** — it has to
+answer the preflight `OPTIONS` with `Access-Control-Allow-Headers: Authorization`,
+or the browser drops the request before it is sent. A 401/403 is called out
+explicitly in the 🐞 debug console.
+
+What this is and is not: the key is a **revocable shared secret**, visible to
+everyone you send the link to (it sits in `localStorage`, in the request
+headers, and — when passed as `&key=` — in browser history and referrer
+headers). That is the intended trade for handing out a demo link. Rotate it by
+restarting the server with a new one, which invalidates every link at once. Do
+not point this at the [Codex bridge](tools/codex-bridge/README.md): a public
+endpoint backed by a ChatGPT Business seat is your company's subscription behind
+one shared string. Your own hardware is the safe thing to expose this way.
+
 ### Mixed content (HTTPS site → HTTP LLM)
 
 GitHub Pages is HTTPS; browsers block calls to a plain-HTTP endpoint. Options:
