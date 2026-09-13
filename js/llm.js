@@ -6,13 +6,18 @@
    * so a single shared URL works with zero setup (e.g. pointing at the Claude
    * proxy: ?endpoint=https://….workers.dev/t/TOKEN&model=claude-opus-5&vision=1).
    * vision=1 turns on the AI visual review — worthwhile with Claude, which reads
-   * the rendered images well; the same model does the critique via the proxy. */
+   * the rendered images well; the same model does the critique via the proxy.
+   * key=… preseeds the API key for an endpoint that requires one (llama-server
+   * --api-key), so a link can be shared with someone outside the tailnet. Note
+   * that a key in a URL lands in browser history and referrer headers — it is a
+   * revocable shared demo secret, not a long-lived credential. */
   try {
     var q = new URLSearchParams(location.search);
-    if (q.get('endpoint') || q.get('model') || q.get('lang') || q.get('vision') !== null) {
+    if (q.get('endpoint') || q.get('model') || q.get('lang') || q.get('key') || q.get('vision') !== null) {
       var boot = {};
       try { boot = JSON.parse(localStorage.getItem('diyw_settings') || '{}'); } catch (e) { boot = {}; }
       if (q.get('endpoint')) boot.endpoint = q.get('endpoint');
+      if (q.get('key')) boot.apiKey = q.get('key');
       if (q.get('model') !== null) boot.model = q.get('model');
       if (q.get('lang')) boot.language = q.get('lang');
       if (q.get('vision') !== null) boot.visionReview = /^(1|true|on|yes)$/i.test(q.get('vision'));
@@ -24,6 +29,7 @@
 
   var DEFAULTS = {
     endpoint: 'http://100.119.213.123:8080/v1',
+    apiKey: '', // bearer token for endpoints that require one ('' = send no Authorization header)
     model: '', // '' = auto: use whatever model the server reports on /models
     temperature: 0.4,
     maxTokens: 16384,
@@ -60,6 +66,18 @@
   // Lightweight logger → the in-app Debug console (🐞). No-ops if Debug is absent.
   function dbg(level, msg) { try { if (window.Debug) window.Debug.log(level, 'llm', msg); } catch (e) {} }
 
+  /* Build request headers, adding Authorization only when a key is configured.
+   * Omitting it entirely matters: a bare llama.cpp/ChatMock started without
+   * --api-key keeps working exactly as before. The header makes every request a
+   * CORS preflight candidate, so an exposed server must also answer OPTIONS with
+   * Access-Control-Allow-Headers: Authorization. */
+  function authHeaders(extra) {
+    var h = extra || {};
+    var key = settings().apiKey;
+    if (key) h['Authorization'] = 'Bearer ' + key;
+    return h;
+  }
+
   /* Resolve which model to send for an endpoint: the configured one, or (auto)
    * the first model that endpoint is currently serving. Resolves to '' if
    * unknown — llama.cpp and most single-model servers ignore the field anyway. */
@@ -70,7 +88,7 @@
     if (m) return Promise.resolve(m);
     var c = modelCache[ep];
     if (c && c.id && (Date.now() - c.at) < 300000) return Promise.resolve(c.id);
-    return fetch(ep.replace(/\/+$/, '') + '/models')
+    return fetch(ep.replace(/\/+$/, '') + '/models', { headers: authHeaders() })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function (j) {
         var id = (j.data && j.data[0] && j.data[0].id) || '';
@@ -143,7 +161,7 @@
         (withRF ? ' response_format=json_schema' : ''));
       return fetch(ep.replace(/\/+$/, '') + '/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         signal: ctrl.signal,
         body: JSON.stringify(body)
       }).then(function (res) {
@@ -172,6 +190,11 @@
           dbg('error', reqId + ' ✖ HTTP ' + res.status + ' from server: ' + t.slice(0, 1500) +
             (res.status === 400 && /reasoning_budget_tokens/.test(t)
               ? '  ⚠ This server rejects reasoning_budget_tokens — clear the reasoning budget field in ⚙ Settings.'
+              : '') +
+            (res.status === 401 || res.status === 403
+              ? (settings().apiKey
+                  ? '  ⚠ The endpoint rejected the API key — check it matches the one the server was started with.'
+                  : '  ⚠ This endpoint requires an API key and none is set — fill in the API key field in ⚙ Settings.')
               : ''));
           throw new Error('LLM server error ' + res.status + ': ' + t.slice(0, 400));
         });
@@ -261,7 +284,7 @@
   // Non-streaming quick test.
   function testConnection() {
     var s = settings();
-    return fetch(s.endpoint.replace(/\/+$/, '') + '/models', { method: 'GET' })
+    return fetch(s.endpoint.replace(/\/+$/, '') + '/models', { method: 'GET', headers: authHeaders() })
       .then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();

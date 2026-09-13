@@ -53,6 +53,50 @@ To showcase the app powered by Claude — billed to your Anthropic account, with
 
 Both sides are HTTPS, so the mixed-content workaround below is not needed for the demo. **Switching models** (e.g. Sonnet vs Opus): ⚙ Settings → Model lists everything from `MODELS`, or hand out links with different `&model=` values. The proxy streams, translates the app's OpenAI-style requests to the Anthropic Messages API, **enables adaptive thinking** on Opus/Sonnet (this is what makes Claude reason about the geometry before answering — without it the model runs in a weak no-thinking mode that's no better than a local model), caches the system prompt (≈90% cheaper repeat turns), strips parameters Claude rejects, and forwards the vision-review images so the visual critique runs on Claude too. Reasoning depth is the `EFFORT` var in `wrangler.toml` (`high` default; `xhigh` for the hardest designs, slower/costlier). After the demo, delete the worker (`npx wrangler delete`) or rotate the key, and the link goes dead.
 
+### Use a ChatGPT subscription instead of an API key
+
+A ChatGPT **Business/Plus/Pro** seat includes Codex, and a local bridge can
+reuse that sign-in to serve an OpenAI-compatible API — so the app runs on GPT
+models with no API key. It needs **no changes to the app**: start the bridge,
+put its URL in ⚙ Settings. Serve the app over HTTP (locally, or to another
+device on your tailnet) and there is no mixed content to work around; only the
+**GitHub Pages** build needs the bridge republished over HTTPS, since a Pages
+site cannot call `http://127.0.0.1`. Setup, the settings that must be cleared,
+and the caveats (it is outside Codex's intended use, and can break without
+notice) are in [`tools/codex-bridge/README.md`](tools/codex-bridge/README.md).
+
+### Share your own LLM without sharing tailnet access
+
+⚙ Settings → **API key** sends an `Authorization: Bearer …` header with every
+request, so an endpoint you expose publicly can require a secret instead of
+relying on network reach. Empty = no header at all, so a local server started
+without a key keeps working unchanged.
+
+1. Start the server with a key you invent — any long random string:
+   ```bash
+   llama-server -m model.gguf --host 0.0.0.0 --api-key "$(openssl rand -hex 24)"
+   ```
+2. Put it behind HTTPS with a tunnel (Cloudflare Tunnel, ngrok, `tailscale
+   funnel`). The app is HTTPS on Pages, so the endpoint must be too.
+3. Share a link that preseeds both — `&key=` fills the field for them:
+   ```
+   https://<you>.github.io/<repo>/?endpoint=https://llm.example.com/v1&key=<KEY>&model=qwen3
+   ```
+
+The server must allow CORS **including the `Authorization` header** — it has to
+answer the preflight `OPTIONS` with `Access-Control-Allow-Headers: Authorization`,
+or the browser drops the request before it is sent. A 401/403 is called out
+explicitly in the 🐞 debug console.
+
+What this is and is not: the key is a **revocable shared secret**, visible to
+everyone you send the link to (it sits in `localStorage`, in the request
+headers, and — when passed as `&key=` — in browser history and referrer
+headers). That is the intended trade for handing out a demo link. Rotate it by
+restarting the server with a new one, which invalidates every link at once. Do
+not point this at the [Codex bridge](tools/codex-bridge/README.md): a public
+endpoint backed by a ChatGPT Business seat is your company's subscription behind
+one shared string. Your own hardware is the safe thing to expose this way.
+
 ### Mixed content (HTTPS site → HTTP LLM)
 
 GitHub Pages is HTTPS; browsers block calls to a plain-HTTP endpoint. Options:
@@ -89,6 +133,7 @@ Built-in debug console: **🐞 button** in the top bar, `Ctrl+Shift+D`, or add `
 - `js/plantdb.js` — bilingual plant catalog (species data + care texts, EN/DE) the AI designs from
 - `js/blender.js` — client for the optional local Blender bridge
 - `tools/blender_bridge.py` — headless Blender HTTP service (renders, STL/GLB with boolean cutouts)
+- `tools/codex-bridge/` — notes for running the app off a ChatGPT subscription (docs only, no code)
 - `js/garden.js` — gardening module: sample vegetable garden, species labels, care resolution
 - `js/viewer.js` — A-Frame viewer: orbit camera, picking, explode, prep & assembly modes
 - `js/llm.js` — OpenAI-compatible streaming client + robust JSON extraction (handles `<think>` blocks)

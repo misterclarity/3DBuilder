@@ -125,6 +125,10 @@
     <label data-i18n-title="tip.setEndpoint"><span data-i18n="set.endpoint">AI endpoint (OpenAI-compatible base URL)</span>
       <input id="setEndpoint" type="text" placeholder="http://100.119.213.123:8080/v1">
     </label>
+    <label data-i18n-title="tip.setKey"><span data-i18n="set.key">API key (only if the endpoint requires one)</span>
+      <input id="setKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…">
+    </label>
+    <small data-i18n="set.keyNote">Sent as an Authorization: Bearer header. Leave empty for a local server started without a key.</small>
     <label data-i18n-title="tip.setModel"><span data-i18n="set.model">Model</span>
       <select id="setModel">
         <option value="" data-i18n="set.modelAuto">Auto — use the model the server is serving</option>
