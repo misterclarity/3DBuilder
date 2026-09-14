@@ -67,7 +67,7 @@
   function dbg(level, msg) { try { if (window.Debug) window.Debug.log(level, 'llm', msg); } catch (e) {} }
 
   /* Build request headers, adding Authorization only when a key is configured.
-   * Omitting it entirely matters: a bare llama.cpp/ChatMock started without
+   * Omitting it entirely matters: a bare llama.cpp server started without
    * --api-key keeps working exactly as before. The header makes every request a
    * CORS preflight candidate, so an exposed server must also answer OPTIONS with
    * Access-Control-Allow-Headers: Authorization. */
